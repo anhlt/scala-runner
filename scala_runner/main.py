@@ -75,9 +75,10 @@ async def run_scala(request: Request, payload: RunRequest):
         filename = os.path.basename(input_path)
         docker_cmd = [
             "docker", "run", "--rm",
-            "-v", f"{workdir}:/mnt",
+            "-v", f"{workdir}:/tmp/",
             "virtuslab/scala-cli:latest",
-            "run", f"/mnt/{filename}",
+            "run", 
+            f"/tmp/{filename}",
             "--scala", payload.scala_version,
             "--dependency", payload.dependency,
         ]
