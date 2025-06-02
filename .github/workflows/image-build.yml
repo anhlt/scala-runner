@@ -50,7 +50,7 @@ jobs:
         run: |
           echo "image=ghcr.io/${{ github.repository_owner }}/scala-runner:latest" \
             >> $GITHUB_OUTPUT
-            
+
   integration-test:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -60,9 +60,7 @@ jobs:
 
       # Pull the freshly-pushed image
       - name: Pull image
-        run: |
-          IMAGE=${{ needs.build-and-push.outputs.image }}
-          docker pull $IMAGE
+        run: docker pull ghcr.io/${{ github.repository_owner }}/scala-runner:latest
 
       # Run it with the socket mounted
       - name: Start container
