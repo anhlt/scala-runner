@@ -1,5 +1,10 @@
 name: Build, Publish & Test Docker Image
 
+permissions:
+  contents: read        # we only need read on the repo
+  packages: write       # enable push to GHCR
+  id-token: write       # if you ever need to do OIDC auth
+
 on:
   push:
     branches: [ main ]
