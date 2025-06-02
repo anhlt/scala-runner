@@ -7,8 +7,6 @@ RUN apt-get update \
 
 WORKDIR /app
 
-RUN docker pull virtuslab/scala-cli:latest
-
 # 1) Install FastAPI, uvicorn, etc.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
