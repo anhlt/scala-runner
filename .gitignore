@@ -10,3 +10,5 @@ venv/
 # IDEs
 .vscode/
 .idea/
+.envrc
+.upload.json
