@@ -1,10 +1,5 @@
 name: Build, Publish & Test Docker Image
 
-permissions:
-  contents: read        # we only need read on the repo
-  packages: write       # enable push to GHCR
-  id-token: write       # if you ever need to do OIDC auth
-# 1) Trigger only on new tags
 on:
   push:
     # match ANY tag (you can tighten this to e.g. 'v*' if you only want semantic-version tags)
