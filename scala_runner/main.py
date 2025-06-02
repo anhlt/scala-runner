@@ -6,13 +6,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from typing import Optional
-
+from typing import List, Optional  # Added List for handling multiple dependencies
 # slowapi imports
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
 # logger
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -24,8 +22,6 @@ formatter = logging.Formatter(
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
-
-
 #
 # 1. Load env
 #
@@ -36,7 +32,6 @@ DEFAULT_DEP = os.getenv(
     "DEFAULT_DEPENDENCY",
     "org.typelevel::cats-core:2.12.0"
 )
-
 #
 # 2. Create limiter
 #
@@ -44,7 +39,6 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[RATE_LIMIT]
 )
-
 app = FastAPI(
     title="Scala-Runner API",
     description="Wrap scala-cli Docker invocation in an HTTP service",
@@ -58,7 +52,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 class RunRequest(BaseModel):
     code: str  # Made code required; removed file_path
     scala_version: str = SCALA_VERSION
-    dependency: str = DEFAULT_DEP
+    # Changed to list to support multiple dependencies
+    dependencies: List[str] = [DEFAULT_DEP]
 
 
 @app.post("/run", summary="Run Scala script via scala-cli in Docker")
@@ -69,7 +64,6 @@ async def run_scala(request: Request, payload: RunRequest):
     try:
         os.write(fd, payload.code.encode())
         os.close(fd)
-
         # Build Docker command
         workdir = os.path.abspath(os.path.dirname(input_path))
         filename = os.path.basename(input_path)
@@ -77,12 +71,13 @@ async def run_scala(request: Request, payload: RunRequest):
             "docker", "run", "--rm",
             "-v", f"{workdir}:/tmp/",
             "virtuslab/scala-cli:latest",
-            "run", 
+            "run",
             f"/tmp/{filename}",
             "--scala", payload.scala_version,
-            "--dependency", payload.dependency,
         ]
-
+        # Add dependencies: loop through the list and add each --dependency flag
+        for dep in payload.dependencies:
+            docker_cmd.extend(["--dependency", dep])
         # Execute
         process = await asyncio.create_subprocess_exec(
             *docker_cmd,
@@ -90,7 +85,6 @@ async def run_scala(request: Request, payload: RunRequest):
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await process.communicate()
-
         if process.returncode == 0:
             return JSONResponse({"status": "success", "output": stdout.decode()})
         else:
@@ -108,7 +102,6 @@ async def run_scala(request: Request, payload: RunRequest):
             else:
                 logger.error("Temporary file does not exist.")
             logger.error(f"Return code: {process.returncode}")
-
             raise HTTPException(
                 500, f"Error running Docker: {stderr.decode()}")
     finally:
