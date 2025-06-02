@@ -9,8 +9,6 @@ RUN apt-get update \
       docker.io \
  && rm -rf /var/lib/apt/lists/*
 
-RUN docker pull virtuslab/scala-cli:latest
-
 # 3. Set working dir
 WORKDIR /app
 
