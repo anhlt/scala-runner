@@ -2,38 +2,46 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
 
 jobs:
-  test:
+  python:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11']
+    timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -e .  
+          pip install -e .        # makes scala_runner available
           pip install pytest httpx
 
-      - name: Pull scala-cli Docker image
-        run: docker pull virtuslab/scala-cli:latest
+      - name: Run Python tests
+        run: pytest -q
 
-      - name: Run unit tests
-        run: pytest -q -m "not integration"
+  scala:
+    runs-on: ubuntu-latest
 
-      - name: Run integration tests
-        # these actually invoke Docker, so give more time
-        run: pytest -q -m integration
+    # tell GH Actions to use this Docker image as the job's runtime
+    container:
+      image: virtuslab/scala-cli:latest
+      # pull-policy: if-not-present  # uncomment if you want to cache locally
+
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Scala CLI tests
+        # now scala-cli is on PATH
+        run: scala-cli test
