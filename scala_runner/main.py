@@ -1,6 +1,4 @@
 import os
-from collections import defaultdict, deque
-from time import time
 import subprocess
 import tempfile
 from fastapi import FastAPI, HTTPException, Request
@@ -8,60 +6,53 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# slowapi imports
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
-# Rate limiting settings (requests per minute)
-RATE_LIMIT = int(os.getenv("RATE_LIMIT", "60"))
-WINDOW_SIZE = 60  # in seconds
+#
+# 1. Load env
+#
+load_dotenv()  # will look for .env in CWD
 
-# In-memory store for tracking request timestamps per client IP
-_clients = defaultdict(deque)
+RATE_LIMIT     = os.getenv("RATE_LIMIT", "5/minute")  # e.g. “5/minute”
+SCALA_VERSION  = os.getenv("DEFAULT_SCALA_VERSION", "2.13")
+DEFAULT_DEP    = os.getenv("DEFAULT_DEPENDENCY", "org.typelevel::cats-core:2.12.0")
+
+#
+# 2. Create limiter
+#
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[RATE_LIMIT]
+)
 
 app = FastAPI(
     title="Scala-Runner API",
-    description="Wrap scala-cli Docker invocation in an HTTP service with rate limiting",
+    description="Wrap scala-cli Docker invocation in an HTTP service",
     version="0.1.1",
 )
 
-# Rate limit middleware
-@app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
-    client_ip = request.client.host
-    now = time()
-    queue = _clients[client_ip]
-
-    # Remove timestamps outside the window
-    while queue and queue[0] <= now - WINDOW_SIZE:
-        queue.popleft()
-
-    if len(queue) >= RATE_LIMIT:
-        return JSONResponse(
-            status_code=429,
-            content={"detail": f"Rate limit exceeded: {RATE_LIMIT} requests per {WINDOW_SIZE} seconds"},
-        )
-
-    queue.append(now)
-    response = await call_next(request)
-    return response
+# register the exception handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 class RunRequest(BaseModel):
     code: str | None = None
     file_path: str | None = None
-    scala_version: str = "2.13"
-    dependency: str = "org.typelevel::cats-core:2.12.0"
+    scala_version: str = SCALA_VERSION
+    dependency: str = DEFAULT_DEP
 
 @app.post("/run", summary="Run Scala script via scala-cli in Docker")
-async def run_scala(request: RunRequest):
-    if not request.code and not request.file_path:
-        raise HTTPException(400, "Must provide 'code' or 'file_path' in the request body.")
-
+@limiter.limit(RATE_LIMIT)  # applies per-client-IP
+async def run_scala(request: Request, payload: RunRequest):
     # 1) Write code to temp file if provided
-    input_path = request.file_path
+    input_path = payload.file_path
     temp_created = False
-    if request.code:
+    if payload.code:
         fd, input_path = tempfile.mkstemp(suffix=".worksheet.sc", text=True)
-        os.write(fd, request.code.encode())
+        os.write(fd, payload.code.encode())
         os.close(fd)
         temp_created = True
 
@@ -77,8 +68,8 @@ async def run_scala(request: RunRequest):
         "-v", f"{workdir}:/mnt",
         "virtuslab/scala-cli:latest",
         "run", f"/mnt/{filename}",
-        "--scala", request.scala_version,
-        "--dependency", request.dependency,
+        "--scala", payload.scala_version,
+        "--dependency", payload.dependency,
     ]
 
     # 4) Execute
