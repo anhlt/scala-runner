@@ -1,15 +1,49 @@
 import os
+from collections import defaultdict, deque
+from time import time
 import subprocess
 import tempfile
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Rate limiting settings (requests per minute)
+RATE_LIMIT = int(os.getenv("RATE_LIMIT", "60"))
+WINDOW_SIZE = 60  # in seconds
+
+# In-memory store for tracking request timestamps per client IP
+_clients = defaultdict(deque)
 
 app = FastAPI(
     title="Scala-Runner API",
-    description="Wrap scala-cli Docker invocation in an HTTP service",
-    version="0.1.0",
+    description="Wrap scala-cli Docker invocation in an HTTP service with rate limiting",
+    version="0.1.1",
 )
+
+# Rate limit middleware
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host
+    now = time()
+    queue = _clients[client_ip]
+
+    # Remove timestamps outside the window
+    while queue and queue[0] <= now - WINDOW_SIZE:
+        queue.popleft()
+
+    if len(queue) >= RATE_LIMIT:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": f"Rate limit exceeded: {RATE_LIMIT} requests per {WINDOW_SIZE} seconds"},
+        )
+
+    queue.append(now)
+    response = await call_next(request)
+    return response
 
 class RunRequest(BaseModel):
     code: str | None = None
