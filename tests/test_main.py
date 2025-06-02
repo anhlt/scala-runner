@@ -1,6 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 from scala_runner.main import app  # Assuming the updated main.py is imported
+import os
+import subprocess
 
 client = TestClient(app)
 
