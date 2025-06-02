@@ -15,6 +15,13 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      docker:
+        image: docker:19.03-dind
+        privileged: true
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock
+
     outputs:
       # export the full image name (including the tag) for downstream jobs
       image: ${{ steps.set-image.outputs.image }}
@@ -46,7 +53,6 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/scala-runner:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/scala-runner:latest
 
-      # 3) Export the 'latest' tag (or you could export the specific tag instead)
       - name: Set image output
         id: set-image
         run: |
@@ -59,11 +65,17 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      docker:
+        image: docker:19.03-dind
+        privileged: true
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock
+
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
-      # Pull the freshly-pushed image
       - name: Pull image
         run: docker pull ghcr.io/${{ github.repository_owner }}/scala-runner:latest
 
