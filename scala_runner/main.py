@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tempfile
+import asyncio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -78,18 +79,20 @@ async def run_scala(request: Request, payload: RunRequest):
 
     # 4) Execute
     try:
-        proc = subprocess.run(
-            docker_cmd,
-            capture_output=True,
-            text=True,
-            check=True,
+        process = await asyncio.create_subprocess_exec(
+            *docker_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        return JSONResponse({"status": "success", "output": proc.stdout})
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(500, e.stderr or "Unknown error running Docker")
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode == 0:
+            return JSONResponse({"status": "success", "output": stdout.decode()})
+        else:
+            raise HTTPException(500, f"Error running Docker: {stderr.decode()}")
     finally:
         if temp_created:
-            os.unlink(input_path)
+            os.unlink(input_path)  # File deletion remains synchronous for simplicity; it's typically fast and non-issue, but can be made async if needed
 
 
 @app.get(
@@ -103,3 +106,12 @@ async def openapi_schema():
     No rate-limit applied.
     """
     return JSONResponse(app.openapi())
+
+
+# Add this after the other route definitions, e.g., after the '/openapi' route
+@app.get("/ping", summary="Health check endpoint")
+async def ping():
+    """
+    Simple health check endpoint that returns 'pong' to confirm the API is running.
+    """
+    return {"status": "pong"}
