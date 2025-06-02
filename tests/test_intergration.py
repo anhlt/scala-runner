@@ -91,4 +91,4 @@ println("Output from multiple dependencies: " + result)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "success"
-    assert "OUTPUT FROM MULTIPLE DEPENDENCIES: MULTIPLE DEPS TEST" in body["output"]
+    assert "Output from multiple dependencies: MULTIPLE DEPS TEST" in body["output"]
