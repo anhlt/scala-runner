@@ -1,5 +1,4 @@
 import os
-import subprocess
 import tempfile
 import asyncio
 from fastapi import FastAPI, HTTPException, Request
@@ -43,8 +42,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 class RunRequest(BaseModel):
-    code: Optional[str] = None
-    file_path: Optional[str] = None
+    code: str  # Made code required; removed file_path
     scala_version: str = SCALA_VERSION
     dependency: str = DEFAULT_DEP
 
@@ -52,33 +50,25 @@ class RunRequest(BaseModel):
 @app.post("/run", summary="Run Scala script via scala-cli in Docker")
 @limiter.limit(RATE_LIMIT)  # applies per-client-IP
 async def run_scala(request: Request, payload: RunRequest):
-    # 1) Write code to temp file if provided
-    input_path = payload.file_path
-    temp_created = False
-    if payload.code:
-        fd, input_path = tempfile.mkstemp(suffix=".worksheet.sc", text=True)
+    # Always create a temp file from the provided code
+    fd, input_path = tempfile.mkstemp(suffix=".worksheet.sc", text=True)
+    try:
         os.write(fd, payload.code.encode())
         os.close(fd)
-        temp_created = True
 
-    # 2) Verify file existence
-    if not os.path.exists(input_path):
-        raise HTTPException(400, f"File not found: {input_path}")
+        # Build Docker command
+        workdir = os.path.abspath(os.path.dirname(input_path))
+        filename = os.path.basename(input_path)
+        docker_cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{workdir}:/mnt",
+            "virtuslab/scala-cli:latest",
+            "run", f"/mnt/{filename}",
+            "--scala", payload.scala_version,
+            "--dependency", payload.dependency,
+        ]
 
-    # 3) Build Docker command
-    workdir = os.path.abspath(os.path.dirname(input_path))
-    filename = os.path.basename(input_path)
-    docker_cmd = [
-        "docker", "run", "--rm",
-        "-v", f"{workdir}:/mnt",
-        "virtuslab/scala-cli:latest",
-        "run", f"/mnt/{filename}",
-        "--scala", payload.scala_version,
-        "--dependency", payload.dependency,
-    ]
-
-    # 4) Execute
-    try:
+        # Execute
         process = await asyncio.create_subprocess_exec(
             *docker_cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -91,8 +81,7 @@ async def run_scala(request: Request, payload: RunRequest):
         else:
             raise HTTPException(500, f"Error running Docker: {stderr.decode()}")
     finally:
-        if temp_created:
-            os.unlink(input_path)  # File deletion remains synchronous for simplicity; it's typically fast and non-issue, but can be made async if needed
+        os.unlink(input_path)  # Always delete the temp file
 
 
 @app.get(

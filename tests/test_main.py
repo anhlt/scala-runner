@@ -1,8 +1,6 @@
-import os
-import subprocess
 import pytest
 from fastapi.testclient import TestClient
-from scala_runner.main import app, RunRequest
+from scala_runner.main import app  # Assuming the updated main.py is imported
 
 client = TestClient(app)
 
@@ -23,20 +21,17 @@ def patch_subprocess(monkeypatch):
     # default to success
     monkeypatch.setattr(subprocess, "run", fake_run_success)
 
-def test_run_with_code(monkeypatch):
+def test_run_with_code():
     resp = client.post("/run", json={"code": "println(\"Hello, Scala!\")"})
     data = resp.json()
     assert resp.status_code == 200
     assert data["status"] == "success"
     assert "Hello, Scala!" in data["output"]
 
-def test_run_with_file_not_found():
-    resp = client.post("/run", json={"file_path": "/no/such/file.sc"})
-    assert resp.status_code == 400
-    assert "File not found" in resp.json()["detail"]
+# Removed test_run_with_file_not_found as file_path is no longer supported
 
 def test_docker_error(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run_fail)
-    resp = client.post("/run", json={"code": "bad code"})
+    resp = client.post("/run", json={"code": "bad code"})  # Updated to use code instead of file_path if applicable
     assert resp.status_code == 500
     assert "Error running Docker" in resp.json()["detail"]
