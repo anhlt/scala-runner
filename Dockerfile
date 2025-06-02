@@ -7,6 +7,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
+RUN mkdir -p /tmp/scala-cache
+
 # 1) Install FastAPI, uvicorn, etc.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

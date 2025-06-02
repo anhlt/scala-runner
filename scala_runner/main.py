@@ -59,53 +59,74 @@ class RunRequest(BaseModel):
 @app.post("/run", summary="Run Scala script via scala-cli in Docker")
 @limiter.limit(RATE_LIMIT)  # applies per-client-IP
 async def run_scala(request: Request, payload: RunRequest):
-    # Always create a temp file from the provided code
+    # 1) Write the user code to a temp file
     fd, input_path = tempfile.mkstemp(suffix=".worksheet.sc", text=True)
     try:
         os.write(fd, payload.code.encode())
         os.close(fd)
-        # Build Docker command
+
+        # 2) Build the Docker command
         workdir = os.path.abspath(os.path.dirname(input_path))
         filename = os.path.basename(input_path)
         docker_cmd = [
             "docker", "run", "--rm",
             "-v", f"{workdir}:/tmp/",
+            "-v", "/tmp/scala-cache:/home/scala/.cache",
             "virtuslab/scala-cli:latest",
-            "run",
-            f"/tmp/{filename}",
+            "run", f"/tmp/{filename}",
             "--scala", payload.scala_version,
         ]
-        # Add dependencies: loop through the list and add each --dependency flag
         for dep in payload.dependencies:
             docker_cmd.extend(["--dependency", dep])
-        # Execute
-        process = await asyncio.create_subprocess_exec(
-            *docker_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
+
+        # 3) Log the exact command we’re about to run
+        logger.info("Running Docker command: %s", " ".join(docker_cmd))
+
+        # 4) Spawn & await the Docker process with a timeout
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *docker_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=60.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("Docker command timed out after 60s: %s",
+                         " ".join(docker_cmd))
+            # best effort kill if still running
+            process.kill()
+            _, stderr = await process.communicate()
+            logger.error("Stderr after timeout: %s",
+                         stderr.decode(errors="ignore"))
+            raise HTTPException(500, "Docker run timed out")
+
+        out_text = stdout.decode(errors="ignore")
+        err_text = stderr.decode(errors="ignore")
+
+        # 5) Handle exit code
         if process.returncode == 0:
-            return JSONResponse({"status": "success", "output": stdout.decode()})
+            logger.info("Docker run succeeded. Stdout: %s", out_text)
+            return JSONResponse({"status": "success", "output": out_text})
         else:
-            # If the process failed, raise an HTTP exception with the error
-            logger.info(f"Docker command failed: {docker_cmd}")
-            logger.error(f"Error output: {stderr.decode()}")
-            # include file content in the error log
-            logger.error(f"Input file content: {payload.code}")
-            # include tmp file path and its content in the error log
-            logger.error(f"Temporary file path: {input_path}")
-            # check if the file exists
-            if os.path.exists(input_path):
-                with open(input_path, 'r') as f:
-                    logger.error(f"Temporary file content: {f.read()}")
-            else:
-                logger.error("Temporary file does not exist.")
-            logger.error(f"Return code: {process.returncode}")
-            raise HTTPException(
-                500, f"Error running Docker: {stderr.decode()}")
+            logger.error("Docker run failed (code=%d).", process.returncode)
+            logger.error("Stdout: %s", out_text)
+            logger.error("Stderr: %s", err_text)
+            # Also log the code and tmp file for post-mortem
+            logger.error("Input code:\n%s", payload.code)
+            logger.error("Temp file path: %s", input_path)
+            with open(input_path, 'r') as f:
+                logger.error("Temp file content:\n%s", f.read())
+            raise HTTPException(500, f"Error running Docker: {err_text}")
+
     finally:
-        os.unlink(input_path)  # Always delete the temp file
+        # 6) Always clean up
+        try:
+            os.unlink(input_path)
+        except OSError:
+            logger.warning("Failed to delete temp file: %s", input_path)
 
 
 @app.get(

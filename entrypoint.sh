@@ -3,6 +3,12 @@ set -eux
 
 # 1) Pull the Scala CLI image so it's cached on the node
 
+until docker -H tcp://localhost:2375 info; do
+  echo "waiting for dockerd…"
+  sleep 1
+done
+
+
 if ! docker pull virtuslab/scala-cli:latest; then
   echo "Failed to pull Scala CLI image. Exiting."
   exit 1
