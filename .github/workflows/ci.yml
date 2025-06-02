@@ -25,6 +25,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -e .  
           pip install pytest httpx
 
       - name: Pull scala-cli Docker image

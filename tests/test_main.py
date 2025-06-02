@@ -2,7 +2,7 @@ import os
 import subprocess
 import pytest
 from fastapi.testclient import TestClient
-from main import app, RunRequest
+from scala_runner.main import app, RunRequest
 
 client = TestClient(app)
 
