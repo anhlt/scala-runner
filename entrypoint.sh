@@ -9,4 +9,4 @@ if ! docker pull virtuslab/scala-cli:latest; then
 fi
 
 # 2) Exec into uvicorn (replaces this shell, preserves signals)
-exec uvicorn main:app --host 0.0.0.0 --port 80
+exec uvicorn scala_runner.main:app --host 0.0.0.0 --port 80
