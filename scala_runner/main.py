@@ -16,11 +16,12 @@ from slowapi.errors import RateLimitExceeded
 # 1. Load env
 #
 load_dotenv()  # will look for .env in CWD
-
-RATE_LIMIT = os.getenv("RATE_LIMIT", "5/minute")  # e.g. “5/minute”
+RATE_LIMIT = os.getenv("RATE_LIMIT", "5/minute")  # e.g. "5/minute"
 SCALA_VERSION = os.getenv("DEFAULT_SCALA_VERSION", "2.13")
-DEFAULT_DEP = os.getenv("DEFAULT_DEPENDENCY",
-                        "org.typelevel::cats-core:2.12.0")
+DEFAULT_DEP = os.getenv(
+    "DEFAULT_DEPENDENCY",
+    "org.typelevel::cats-core:2.12.0"
+)
 
 #
 # 2. Create limiter
@@ -35,7 +36,6 @@ app = FastAPI(
     description="Wrap scala-cli Docker invocation in an HTTP service",
     version="0.1.1",
 )
-
 # register the exception handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -90,3 +90,16 @@ async def run_scala(request: Request, payload: RunRequest):
     finally:
         if temp_created:
             os.unlink(input_path)
+
+
+@app.get(
+    "/openapi",
+    summary="Alias for the OpenAPI schema",
+    include_in_schema=False
+)
+async def openapi_schema():
+    """
+    Return the OpenAPI schema (alias for /openapi.json).
+    No rate-limit applied.
+    """
+    return JSONResponse(app.openapi())
