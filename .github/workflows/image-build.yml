@@ -45,8 +45,12 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/scala-runner:${{ github.sha }}
         # expose the image ref for downstream jobs
 
-      - run: echo "image=ghcr.io/${{ github.repository_owner }}/scala-runner:latest" >> $GITHUB_OUTPUT
-
+      - name: Set image output
+        id: set-image
+        run: |
+          echo "image=ghcr.io/${{ github.repository_owner }}/scala-runner:latest" \
+            >> $GITHUB_OUTPUT
+            
   integration-test:
     needs: build-and-push
     runs-on: ubuntu-latest
