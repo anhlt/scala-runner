@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from typing import Optional
 
 # slowapi imports
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -16,9 +17,10 @@ from slowapi.errors import RateLimitExceeded
 #
 load_dotenv()  # will look for .env in CWD
 
-RATE_LIMIT     = os.getenv("RATE_LIMIT", "5/minute")  # e.g. “5/minute”
-SCALA_VERSION  = os.getenv("DEFAULT_SCALA_VERSION", "2.13")
-DEFAULT_DEP    = os.getenv("DEFAULT_DEPENDENCY", "org.typelevel::cats-core:2.12.0")
+RATE_LIMIT = os.getenv("RATE_LIMIT", "5/minute")  # e.g. “5/minute”
+SCALA_VERSION = os.getenv("DEFAULT_SCALA_VERSION", "2.13")
+DEFAULT_DEP = os.getenv("DEFAULT_DEPENDENCY",
+                        "org.typelevel::cats-core:2.12.0")
 
 #
 # 2. Create limiter
@@ -38,11 +40,13 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
 class RunRequest(BaseModel):
-    code: str | None = None
-    file_path: str | None = None
+    code: Optional[str] = None
+    file_path: Optional[str] = None
     scala_version: str = SCALA_VERSION
     dependency: str = DEFAULT_DEP
+
 
 @app.post("/run", summary="Run Scala script via scala-cli in Docker")
 @limiter.limit(RATE_LIMIT)  # applies per-client-IP
