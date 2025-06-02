@@ -13,6 +13,19 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+# logger
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+# log formatting
+formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Configure the logger to output to console
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+
 #
 # 1. Load env
 #
@@ -76,11 +89,27 @@ async def run_scala(request: Request, payload: RunRequest):
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await process.communicate()
-        
+
         if process.returncode == 0:
             return JSONResponse({"status": "success", "output": stdout.decode()})
         else:
-            raise HTTPException(500, f"Error running Docker: {stderr.decode()}")
+            # If the process failed, raise an HTTP exception with the error
+            logger.info(f"Docker command failed: {docker_cmd}")
+            logger.error(f"Error output: {stderr.decode()}")
+            # include file content in the error log
+            logger.error(f"Input file content: {payload.code}")
+            # include tmp file path and its content in the error log
+            logger.error(f"Temporary file path: {input_path}")
+            # check if the file exists
+            if os.path.exists(input_path):
+                with open(input_path, 'r') as f:
+                    logger.error(f"Temporary file content: {f.read()}")
+            else:
+                logger.error("Temporary file does not exist.")
+            logger.error(f"Return code: {process.returncode}")
+
+            raise HTTPException(
+                500, f"Error running Docker: {stderr.decode()}")
     finally:
         os.unlink(input_path)  # Always delete the temp file
 
