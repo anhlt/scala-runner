@@ -39,4 +39,4 @@ def test_docker_error(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run_fail)
     resp = client.post("/run", json={"code": "bad code"})
     assert resp.status_code == 500
-    assert "Docker error!" in resp.json()["detail"]
+    assert "Error running Docker" in resp.json()["detail"]
