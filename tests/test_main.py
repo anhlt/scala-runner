@@ -24,7 +24,7 @@ def patch_subprocess(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run_success)
 
 def test_run_with_code(monkeypatch):
-    resp = client.post("/run", json={"code": "println(\"Hi\")"})
+    resp = client.post("/run", json={"code": "println(\"Hello, Scala!\")"})
     data = resp.json()
     assert resp.status_code == 200
     assert data["status"] == "success"
