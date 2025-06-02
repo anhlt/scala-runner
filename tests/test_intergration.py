@@ -6,6 +6,7 @@ from scala_runner.main import app, RunRequest
 
 client = TestClient(app)
 
+
 @pytest.mark.integration
 def test_run_scala_file(tmp_path):
     # 1) create a small .worksheet.sc file
@@ -24,6 +25,7 @@ def test_run_scala_file(tmp_path):
     body = resp.json()
     assert body["status"] == "success"
     assert "Integration Test" in body["output"]
+
 
 @pytest.mark.integration
 def test_run_scala_code_direct():
