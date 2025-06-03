@@ -26,7 +26,7 @@ logger.addHandler(console_handler)
 # 1. Load env
 #
 load_dotenv()  # will look for .env in CWD
-RATE_LIMIT = os.getenv("RATE_LIMIT", "5/minute")  # e.g. "5/minute"
+RATE_LIMIT = os.getenv("RATE_LIMIT", "10/minute")  # e.g. "5/minute"
 SCALA_VERSION = os.getenv("DEFAULT_SCALA_VERSION", "3.6.4")
 DEFAULT_DEP = os.getenv(
     "DEFAULT_DEPENDENCY",
