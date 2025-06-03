@@ -85,6 +85,7 @@ async def run_scala(request: Request, payload: RunRequest):
             "virtuslab/scala-cli:latest",
             "run", f"/tmp/{filename}",
             "--scala", payload.scala_version,
+            "-q"
         ]
         for dep in payload.dependencies:
             docker_cmd.extend(["--dependency", dep])
