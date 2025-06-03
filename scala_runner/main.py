@@ -4,7 +4,7 @@ import tempfile
 import asyncio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from dotenv import load_dotenv
 from typing import List, Optional  # Added List for handling multiple dependencies
 # slowapi imports
@@ -27,7 +27,7 @@ logger.addHandler(console_handler)
 #
 load_dotenv()  # will look for .env in CWD
 RATE_LIMIT = os.getenv("RATE_LIMIT", "5/minute")  # e.g. "5/minute"
-SCALA_VERSION = os.getenv("DEFAULT_SCALA_VERSION", "2.13")
+SCALA_VERSION = os.getenv("DEFAULT_SCALA_VERSION", "3.6.4")
 DEFAULT_DEP = os.getenv(
     "DEFAULT_DEPENDENCY",
     "org.typelevel::cats-core:2.12.0"
@@ -50,17 +50,27 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 class RunRequest(BaseModel):
-    code: str  # Made code required; removed file_path
-    scala_version: str = SCALA_VERSION
-    # Changed to list to support multiple dependencies
+    code: str
+    scala_version: str
     dependencies: List[str] = [DEFAULT_DEP]
+    code: str
+    file_extension: str
+
+    @validator("file_extension")
+    def clean_and_check_extension(cls, v: str) -> str:
+        # strip any leading dot and normalize
+        ext = v.lstrip(".").lower()
+        allowed = {"sc", "scala"}
+        if ext not in allowed:
+            raise ValueError(f"file_extension must be one of {allowed}")
+        return ext
 
 
 @app.post("/run", summary="Run Scala script via scala-cli in Docker")
 @limiter.limit(RATE_LIMIT)  # applies per-client-IP
 async def run_scala(request: Request, payload: RunRequest):
     # 1) Write the user code to a temp file
-    fd, input_path = tempfile.mkstemp(suffix=".worksheet.sc", text=True)
+    fd, input_path = tempfile.mkstemp(suffix=f".{payload.file_extension}", text=True)
     try:
         os.write(fd, payload.code.encode())
         os.close(fd)

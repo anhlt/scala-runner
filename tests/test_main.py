@@ -1,39 +1,58 @@
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
-from scala_runner.main import app  # Assuming the updated main.py is imported
-import os
-import subprocess
+from scala_runner.main import app  # adjust import path if needed
 
 client = TestClient(app)
 
-class DummyProc:
-    def __init__(self, stdout="", stderr="", returncode=0):
+class DummyProcess:
+    def __init__(self, stdout=b"", stderr=b"", returncode=0):
         self.stdout = stdout
         self.stderr = stderr
         self.returncode = returncode
 
-def fake_run_success(cmd, capture_output, text, check):
-    return DummyProc(stdout="Hello, Scala!")
+    async def communicate(self):
+        return self.stdout, self.stderr
 
-def fake_run_fail(cmd, capture_output, text, check):
-    raise subprocess.CalledProcessError(1, cmd, stderr="Docker error!")
+async def fake_success_create(*args, **kwargs):
+    # Simulate a successful Docker run
+    return DummyProcess(stdout=b"Hello, Scala!", returncode=0)
+
+async def fake_fail_create(*args, **kwargs):
+    # Simulate a failed Docker run
+    return DummyProcess(stderr=b"Docker error!", returncode=1)
 
 @pytest.fixture(autouse=True)
-def patch_subprocess(monkeypatch):
-    # default to success
-    monkeypatch.setattr(subprocess, "run", fake_run_success)
+def patch_async_subprocess(monkeypatch):
+    # By default, patch asyncio.create_subprocess_exec to succeed
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_success_create)
 
 def test_run_with_code():
-    resp = client.post("/run", json={"code": "println(\"Hello, Scala!\")"})
-    data = resp.json()
+    resp = client.post(
+        "/run",
+        json={
+            "code": "println(\"Hello, Scala!\")",
+            "scala_version": "3.6.4",
+            "file_extension": "sc"
+        }
+    )
     assert resp.status_code == 200
+    data = resp.json()
     assert data["status"] == "success"
     assert "Hello, Scala!" in data["output"]
 
-# Removed test_run_with_file_not_found as file_path is no longer supported
-
 def test_docker_error(monkeypatch):
-    monkeypatch.setattr(subprocess, "run", fake_run_fail)
-    resp = client.post("/run", json={"code": "bad code"})  # Updated to use code instead of file_path if applicable
+    # Override to simulate Docker failure
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_fail_create)
+
+    resp = client.post(
+        "/run",
+        json={
+            "code": "bad code",
+            "scala_version": "3.6.4",
+            "file_extension": "sc"
+        }
+    )
     assert resp.status_code == 500
-    assert "Error running Docker" in resp.json()["detail"]
+    detail = resp.json().get("detail", "")
+    assert "Error running Docker" in detail
