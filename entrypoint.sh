@@ -22,6 +22,11 @@ if ! docker run --rm -v /tmp/:/tmp/   virtuslab/scala-cli:latest run /tmp/hello.
   exit 1
 fi
 
+if ! docker run --rm -v /tmp/:/tmp/   virtuslab/scala-cli:latest run /tmp/hello.sc --scala 3.6.4 --verbose --progress --platform=jvm; then
+  echo "Failed to compile Scala app. Exiting."
+  exit 1
+fi
+
 
 # 2) Exec into uvicorn (replaces this shell, preserves signals)
 exec uvicorn scala_runner.main:app --host 0.0.0.0 --port 80
