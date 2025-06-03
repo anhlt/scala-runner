@@ -97,7 +97,7 @@ jobs:
 
       - name: Test Docker-in-Docker
         run: |
-          PAYLOAD='{"code":"println(scala.util.Properties.versionString)","scala_version":"2.13"}'
+          PAYLOAD='{"code":"println(scala.util.Properties.versionString)","scala_version":"2.13","file_extension":"sc"}'
           curl -s -X POST http://localhost:8080/run \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" | jq .
