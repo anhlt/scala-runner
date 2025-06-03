@@ -2,6 +2,7 @@ import os
 import subprocess
 import tempfile
 import asyncio
+import json
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, validator
@@ -13,6 +14,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 # logger
 import logging
+from .output_process import clean_subprocess_output
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 # log formatting
@@ -115,7 +118,7 @@ async def run_scala(request: Request, payload: RunRequest):
             raise HTTPException(500, "Docker run timed out")
 
         out_text = stdout.decode(errors="ignore")
-        err_text = stderr.decode(errors="ignore")
+        err_text = clean_subprocess_output(stderr.decode(errors="ignore"))
 
         # 5) Handle exit code
         if process.returncode == 0:
@@ -130,7 +133,9 @@ async def run_scala(request: Request, payload: RunRequest):
             logger.error("Temp file path: %s", input_path)
             with open(input_path, 'r') as f:
                 logger.error("Temp file content:\n%s", f.read())
-            raise HTTPException(500, f"Error running Docker: {err_text}")
+
+            err_text = json.dumps({"status": "error", "error": err_text})
+            raise HTTPException(500, f"{err_text}")
 
     finally:
         # 6) Always clean up
