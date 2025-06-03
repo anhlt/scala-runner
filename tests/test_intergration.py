@@ -110,7 +110,7 @@ println("Output from multiple dependencies: " + result)
 def test_run_scala_code_with_cats_and_cats_effect_3_6_4():
     scala_code = '''
 import cats.effect.IO
-
+import cats.effect.unsafe.implicits.global
 object EffectExample {
   def main(args: Array[String]): Unit = {
     IO(println("Cats Effect Test")).unsafeRunSync()
