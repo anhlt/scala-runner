@@ -219,10 +219,10 @@ object SqlTypeParser:
 
 // --- Column Definition Parser -------------------------------------
 object ColumnParser:
-  import SQL.*, SqlTypeParser.*
+  import SQL.*, SqlTypeParser._
 
   private val strLit: Parser[String] =
-    (Parser.char(''') *> Parser.charWhere(_ != ''').rep.string <* Parser.char('''))
+    (Parser.char('\'') *> Parser.charWhere(_ != '\'').rep.string <* Parser.char('\''))
       .surroundedBy(wsp0)
 
   private val defaultVal: Parser[String] =
@@ -253,13 +253,13 @@ object CreateTableParser:
 // --- Main & Test ---------------------------------------------------
 @main def runParser(): Unit =
   val input =
-    '''
+    \"\"\"
       |CREATE TABLE users (
       |  id    INT DEFAULT 0,
       |  name  VARCHAR(100) DEFAULT 'anonymous',
       |  bio   TEXT
       |);
-    '''.stripMargin.trim
+    \"\"\".stripMargin.trim
 
   CreateTableParser.createTable.parseAll(input) match
     case Right(ct) => println(s"✅ Parsed AST: $ct")
