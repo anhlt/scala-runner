@@ -132,7 +132,7 @@ async def run_scala(
         else:
             logger.error("Docker run failed (code=%d).", process.returncode)
 
-            error_response = json.dumps({"status": "error", "error": err_text})
+            error_response = json.dumps({"status": "error", "output": err_text})
             raise HTTPException(500, f"{error_response}")
 
     finally:

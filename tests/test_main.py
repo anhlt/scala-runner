@@ -54,5 +54,5 @@ def test_docker_error(monkeypatch):
         }
     )
     assert resp.status_code == 500
-    detail = resp.json().get("detail", "")
-    assert "Error running Docker" in detail
+    detail = resp.json().get("output", "")
+    assert "Docker error!" in detail
