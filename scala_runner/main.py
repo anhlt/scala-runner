@@ -3,9 +3,9 @@ import subprocess
 import tempfile
 import asyncio
 import json
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 from dotenv import load_dotenv
 from typing import List, Optional  # Added List for handling multiple dependencies
 # slowapi imports
@@ -56,10 +56,9 @@ class RunRequest(BaseModel):
     code: str
     scala_version: str
     dependencies: List[str] = [DEFAULT_DEP]
-    code: str
     file_extension: str
 
-    @validator("file_extension")
+    @field_validator("file_extension")
     def clean_and_check_extension(cls, v: str) -> str:
         # strip any leading dot and normalize
         ext = v.lstrip(".").lower()
@@ -71,7 +70,11 @@ class RunRequest(BaseModel):
 
 @app.post("/run", summary="Run Scala script via scala-cli in Docker")
 @limiter.limit(RATE_LIMIT)  # applies per-client-IP
-async def run_scala(request: Request, payload: RunRequest):
+async def run_scala(
+    request: Request,
+    payload: RunRequest,
+    background_tasks: BackgroundTasks,     # ← added
+):
     # 1) Write the user code to a temp file
     fd, input_path = tempfile.mkstemp(suffix=f".{payload.file_extension}", text=True)
     try:
@@ -84,7 +87,7 @@ async def run_scala(request: Request, payload: RunRequest):
         docker_cmd = [
             "docker", "run", "--rm",
             "-v", f"{workdir}:/tmp/",
-            "-v", "/tmp/scala-cache:/home/scala/.cache",
+            "-v", "/home/scala/.cache:/home/scala/.cache",
             "virtuslab/scala-cli:latest",
             "run", f"/tmp/{filename}",
             "--scala", payload.scala_version,
@@ -93,7 +96,7 @@ async def run_scala(request: Request, payload: RunRequest):
         for dep in payload.dependencies:
             docker_cmd.extend(["--dependency", dep])
 
-        # 3) Log the exact command we’re about to run
+        # 3) Log the exact command we're about to run
         logger.info("Running Docker command: %s", " ".join(docker_cmd))
 
         # 4) Spawn & await the Docker process with a timeout
@@ -108,34 +111,29 @@ async def run_scala(request: Request, payload: RunRequest):
                 timeout=60.0
             )
         except asyncio.TimeoutError:
-            logger.error("Docker command timed out after 60s: %s",
-                         " ".join(docker_cmd))
-            # best effort kill if still running
+            logger.error("Docker command timed out after 60s: %s", " ".join(docker_cmd))
             process.kill()
             _, stderr = await process.communicate()
-            logger.error("Stderr after timeout: %s",
-                         stderr.decode(errors="ignore"))
+            logger.error("Stderr after timeout: %s", stderr.decode(errors="ignore"))
             raise HTTPException(500, "Docker run timed out")
 
         out_text = stdout.decode(errors="ignore")
         err_text = clean_subprocess_output(stderr.decode(errors="ignore"))
 
+        background_tasks.add_task(
+                _cleanup_scala_cache,
+            )
         # 5) Handle exit code
         if process.returncode == 0:
             logger.info("Docker run succeeded. Stdout: %s", out_text)
+            # Schedule background cache cleanup
+
             return JSONResponse({"status": "success", "output": out_text})
         else:
             logger.error("Docker run failed (code=%d).", process.returncode)
-            logger.error("Stdout: %s", out_text)
-            logger.error("Stderr: %s", err_text)
-            # Also log the code and tmp file for post-mortem
-            logger.error("Input code:\n%s", payload.code)
-            logger.error("Temp file path: %s", input_path)
-            with open(input_path, 'r') as f:
-                logger.error("Temp file content:\n%s", f.read())
 
-            err_text = json.dumps({"status": "error", "error": err_text})
-            raise HTTPException(500, f"{err_text}")
+            error_response = json.dumps({"status": "error", "output": err_text})
+            raise HTTPException(500, f"{error_response}")
 
     finally:
         # 6) Always clean up
@@ -143,6 +141,32 @@ async def run_scala(request: Request, payload: RunRequest):
             os.unlink(input_path)
         except OSError:
             logger.warning("Failed to delete temp file: %s", input_path)
+
+
+# 7) Background cleanup helper
+async def _cleanup_scala_cache():
+    """
+    Runs `scala-cli clean` inside the Docker image to purge caches.
+    """
+    docker_cmd = [
+        "docker", "run", "--rm",
+        "-v", "/home/scala/.cache:/home/scala/.cache",
+        "virtuslab/scala-cli:latest",
+        "clean"
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *docker_cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, err = await proc.communicate()
+    if proc.returncode != 0:
+        logger.warning(
+            "Background scala-cli clean failed (code=%d): %s",
+            proc.returncode,
+            err.decode(errors="ignore")
+        )
 
 
 @app.get(
@@ -158,7 +182,6 @@ async def openapi_schema():
     return JSONResponse(app.openapi())
 
 
-# Add this after the other route definitions, e.g., after the '/openapi' route
 @app.get("/ping", summary="Health check endpoint")
 async def ping():
     """
