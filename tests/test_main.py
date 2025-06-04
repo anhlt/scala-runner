@@ -1,5 +1,5 @@
 import asyncio
-import pytest
+import pytest # type: ignore
 from fastapi.testclient import TestClient
 from scala_runner.main import app  # adjust import path if needed
 
