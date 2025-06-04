@@ -17,11 +17,6 @@ fi
 # 2) Run Scala CLI to compile the Scala app
 echo 'println("hello")' > /tmp/hello.sc
 
-if ! docker run --rm -v /tmp/:/tmp/   virtuslab/scala-cli:latest clean; then
-  echo "Failed to compile Scala app. Exiting."
-  exit 1
-fi
-
 if ! docker run --rm -v /tmp/:/tmp/   virtuslab/scala-cli:latest run /tmp/hello.sc --scala 2.13 --verbose --progress --platform=jvm; then
   echo "Failed to compile Scala app. Exiting."
   exit 1
