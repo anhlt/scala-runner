@@ -87,7 +87,7 @@ async def run_scala(
         docker_cmd = [
             "docker", "run", "--rm",
             "-v", f"{workdir}:/tmp/",
-            "-v", "/home/scala/.cache:/home/scala/.cache",
+            "-v", "/home/scala/.cache/:/home/scala/.cache/",
             "virtuslab/scala-cli:latest",
             "run", f"/tmp/{filename}",
             "--scala", payload.scala_version,
@@ -120,9 +120,7 @@ async def run_scala(
         out_text = stdout.decode(errors="ignore")
         err_text = clean_subprocess_output(stderr.decode(errors="ignore"))
 
-        background_tasks.add_task(
-                _cleanup_scala_cache,
-            )
+
         # 5) Handle exit code
         if process.returncode == 0:
             logger.info("Docker run succeeded. Stdout: %s", out_text)
@@ -130,15 +128,17 @@ async def run_scala(
 
             return JSONResponse({"status": "success", "output": out_text})
         else:
-            logger.error("Docker run failed (code=%d).", process.returncode)
-
-            error_response = json.dumps({"status": "error", "output": err_text})
+            logger.error("Docker run failed (code=%d). errors: %s", process.returncode, err_text.join("\n"))
+            error_response = json.dumps({"status": "error", "output": err_text.join("\n")})
             raise HTTPException(500, f"{error_response}")
 
     finally:
         # 6) Always clean up
         try:
             os.unlink(input_path)
+            background_tasks.add_task(
+                    _cleanup_scala_cache,
+                )
         except OSError:
             logger.warning("Failed to delete temp file: %s", input_path)
 
@@ -150,7 +150,7 @@ async def _cleanup_scala_cache():
     """
     docker_cmd = [
         "docker", "run", "--rm",
-        "-v", "/home/scala/.cache:/home/scala/.cache",
+        "-v", "/home/scala/.cache/:/home/scala/.cache/",
         "virtuslab/scala-cli:latest",
         "clean"
     ]
