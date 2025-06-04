@@ -76,7 +76,8 @@ async def run_scala(
     background_tasks: BackgroundTasks,     # ← added
 ):
     # 1) Write the user code to a temp file
-    fd, input_path = tempfile.mkstemp(suffix=f".{payload.file_extension}", text=True)
+    fd, input_path = tempfile.mkstemp(
+        suffix=f".{payload.file_extension}", text=True)
     try:
         os.write(fd, payload.code.encode())
         os.close(fd)
@@ -111,15 +112,16 @@ async def run_scala(
                 timeout=60.0
             )
         except asyncio.TimeoutError:
-            logger.error("Docker command timed out after 60s: %s", " ".join(docker_cmd))
+            logger.error("Docker command timed out after 60s: %s",
+                         " ".join(docker_cmd))
             process.kill()
             _, stderr = await process.communicate()
-            logger.error("Stderr after timeout: %s", stderr.decode(errors="ignore"))
+            logger.error("Stderr after timeout: %s",
+                         stderr.decode(errors="ignore"))
             raise HTTPException(500, "Docker run timed out")
 
         out_text = stdout.decode(errors="ignore")
         err_text = clean_subprocess_output(stderr.decode(errors="ignore"))
-
 
         # 5) Handle exit code
         if process.returncode == 0:
@@ -128,8 +130,10 @@ async def run_scala(
 
             return JSONResponse({"status": "success", "output": out_text})
         else:
-            logger.error("Docker run failed (code=%d). errors: %s", process.returncode, err_text.join("\n"))
-            error_response = json.dumps({"status": "error", "output": err_text.join("\n")})
+            logger.error("Docker run failed (code=%d). errors: %s",
+                         process.returncode, ("/n").join(err_text))
+            error_response = json.dumps(
+                {"status": "error", "output": ("/n").join(err_text)})
             raise HTTPException(500, f"{error_response}")
 
     finally:
@@ -137,8 +141,8 @@ async def run_scala(
         try:
             os.unlink(input_path)
             background_tasks.add_task(
-                    _cleanup_scala_cache,
-                )
+                _cleanup_scala_cache,
+            )
         except OSError:
             logger.warning("Failed to delete temp file: %s", input_path)
 
