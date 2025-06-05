@@ -43,7 +43,7 @@ object SqlTypeParser:
   val intType:    Parser[SqlType] = kw("INT").as(SqlType.IntType)
   val varcharType: Parser[SqlType] =
     (kw("VARCHAR") *> Parser.char('(').surroundedBy(wsp0) *> SQL.intLit <* Parser.char(')').surroundedBy(wsp0))
-      .map(SqlType.Varchar)
+      .map(SqlType.Varchar.apply(_))
   val textType:   Parser[SqlType] = kw("TEXT").as(SqlType.TextType)
   val sqlType:    Parser[SqlType] = Parser.oneOf(List(varcharType, intType, textType))
 
