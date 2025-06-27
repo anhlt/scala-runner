@@ -48,7 +48,6 @@ class SBTRunner:
         
         docker_cmd = [
             "docker", "run", "--rm",
-            "--platform", "linux/amd64",
             f"-v{workspace_path}:/workspace",
             f"-v/tmp/sbt-cache:/root/.sbt",
             f"-v/tmp/ivy-cache:/root/.ivy2",
@@ -57,6 +56,11 @@ class SBTRunner:
             self.docker_image,
             "sbt"
         ] + sbt_commands
+        
+        # Add platform flag for CI environments (GitHub Actions runs on amd64)
+        if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+            docker_cmd.insert(3, "--platform")
+            docker_cmd.insert(4, "linux/amd64")
         
         logger.info(f"Running SBT command: {' '.join(docker_cmd)}")
         

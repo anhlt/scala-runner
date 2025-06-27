@@ -13,7 +13,7 @@ fi
 
 # Pre-pull the SBT Docker image to avoid delays during first run
 echo "Pulling SBT Docker image..."
-docker pull sbtscala/scala-sbt:eclipse-temurin-jammy-17.0.8.1_1.9.6_3.3.1 || {
+docker pull sbtscala/scala-sbt:eclipse-temurin-alpine-21.0.7_6_1.11.2_3.7.1 || {
     echo "Warning: Failed to pull SBT Docker image. Commands may fail later."
 }
 

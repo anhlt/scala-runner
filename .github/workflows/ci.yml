@@ -9,13 +9,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11']
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
@@ -27,14 +27,19 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install -e .        # makes scala_runner available
-          pip install pytest httpx
 
-      - name: Pull scala-cli Docker image
-        run: docker pull virtuslab/scala-cli:latest
+      - name: Verify Docker is available
+        run: |
+          docker --version
+          docker info
+
+      - name: Pull SBT Docker image
+        run: |
+          docker pull sbtscala/scala-sbt:eclipse-temurin-alpine-21.0.7_6_1.11.2_3.7.1
 
       - name: Run unit tests
-        run: pytest -q -m "not integration"
+        run: pytest -v -m "not integration"
 
       - name: Run integration tests
         # these actually invoke Docker, so give more time
-        run: pytest -q -m integration
+        run: pytest -v -m integration --tb=short

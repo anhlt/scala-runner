@@ -29,8 +29,8 @@ class TestSBTRunner:
 
     def test_init(self, sbt_runner):
         """Test SBTRunner initialization"""
-        assert sbt_runner.image == "sbtscala/scala-sbt:eclipse-temurin-jammy-17.0.8.1_1.9.6_3.3.1"
-        assert sbt_runner.timeout == 300
+        assert sbt_runner.image == "sbtscala/scala-sbt:eclipse-temurin-alpine-21.0.7_6_1.11.2_3.7.1"
+        assert sbt_runner.timeout == 120
 
     def test_is_valid_sbt_command(self, sbt_runner):
         """Test SBT command validation"""

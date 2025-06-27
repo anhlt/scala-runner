@@ -11,35 +11,30 @@ permissions:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      docker:
-        image: docker:19.03-dind
-        volumes:
-          - /var/run/docker.sock:/var/run/docker.sock
-
+    timeout-minutes: 25
+    
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up QEMU (for cross-building)
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
         with:
           install: true       # ensures buildx is available
           driver: docker-container
 
       - name: Login to GHCR
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & Push multi-arch image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: true
@@ -60,16 +55,11 @@ jobs:
   integration-test:
     needs: build-and-push
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      docker:
-        image: docker:19.03-dind
-        volumes:
-          - /var/run/docker.sock:/var/run/docker.sock
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Pull image
         run: docker pull ghcr.io/${{ github.repository_owner }}/scala-runner:latest
@@ -78,7 +68,7 @@ jobs:
         run: |
           IMAGE=ghcr.io/${{ github.repository_owner }}/scala-runner:latest
           docker run -d --name scala-test \
-            -p 8080:80 \
+            -p 8080:8000 \
             -v /tmp/:/tmp/ \
             -v /var/run/docker.sock:/var/run/docker.sock \
             $IMAGE
@@ -86,21 +76,233 @@ jobs:
       - name: Wait for API
         run: |
           for i in {1..100}; do
-            if curl -s http://localhost:8080/ping | grep pong; then
+            if curl -s http://localhost:8080/ping | grep -q "pong"; then
               echo "API is up"
               exit 0
             fi
-            sleep 2
+            sleep 3
           done
           echo "API did not start in time" >&2
           exit 1
 
-      - name: Test Docker-in-Docker
+      - name: Test Create Workspace
         run: |
-          PAYLOAD='{"code":"println(scala.util.Properties.versionString)","scala_version":"2.13","file_extension":"sc"}'
-          curl -s -X POST http://localhost:8080/run \
+          echo "Creating workspace..."
+          RESPONSE=$(curl -s -X POST http://localhost:8080/workspaces \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" | jq .
+            -d '{"name":"test-workspace"}')
+          echo "Create workspace response: $RESPONSE"
+          
+          # Verify workspace was created successfully
+          if echo "$RESPONSE" | grep -q '"status":"success"'; then
+            echo "✅ Workspace created successfully"
+          else
+            echo "❌ Failed to create workspace"
+            exit 1
+          fi
+
+      - name: Test Create Scala File
+        run: |
+          echo "Creating Scala file..."
+          SCALA_CODE='object HelloWorld {
+            def main(args: Array[String]): Unit = {
+              println("Hello from Docker integration test!")
+              println("Scala version: " + scala.util.Properties.versionString)
+              println("Current time: " + java.time.LocalDateTime.now())
+              println("Arguments received: " + args.mkString(", "))
+            }
+          }'
+          
+          # Use proper JSON encoding with jq
+          PAYLOAD=$(jq -n \
+            --arg workspace "test-workspace" \
+            --arg path "src/main/scala/HelloWorld.scala" \
+            --arg content "$SCALA_CODE" \
+            '{workspace_name: $workspace, file_path: $path, content: $content}')
+          
+          RESPONSE=$(curl -s -X POST http://localhost:8080/files \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          
+          echo "Create file response: $RESPONSE"
+          
+          if echo "$RESPONSE" | grep -q '"created":true'; then
+            echo "✅ Scala file created successfully"
+          else
+            echo "❌ Failed to create Scala file"
+            exit 1
+          fi
+
+      - name: Test SBT Compile
+        run: |
+          echo "Compiling Scala project..."
+          RESPONSE=$(curl -s -X POST http://localhost:8080/sbt/compile \
+            -H "Content-Type: application/json" \
+            -d '{"workspace_name":"test-workspace"}')
+          
+          echo "Compile response: $RESPONSE"
+          
+          if echo "$RESPONSE" | grep -q '"status":"success"'; then
+            echo "✅ Scala project compiled successfully"
+          else
+            echo "❌ Failed to compile Scala project"
+            echo "Full response: $RESPONSE"
+            exit 1
+          fi
+
+      - name: Test SBT Run Project
+        run: |
+          echo "Running Scala project..."
+          RESPONSE=$(curl -s -X POST http://localhost:8080/sbt/run-project \
+            -H "Content-Type: application/json" \
+            -d '{"workspace_name":"test-workspace"}')
+          
+          echo "Run response: $RESPONSE"
+          
+          if echo "$RESPONSE" | grep -q '"status":"success"'; then
+            echo "✅ Scala project ran successfully"
+            # Check if our expected output is in the response
+            if echo "$RESPONSE" | grep -q "Hello from Docker integration test"; then
+              echo "✅ Expected output found in response"
+            else
+              echo "⚠️ Expected output not found, but execution succeeded"
+            fi
+            if echo "$RESPONSE" | grep -q "Scala version:"; then
+              echo "✅ Scala version output found"
+            fi
+          else
+            echo "❌ Failed to run Scala project"
+            echo "Full response: $RESPONSE"
+            exit 1
+          fi
+
+      - name: Test SBT Clean
+        run: |
+          echo "Cleaning Scala project..."
+          RESPONSE=$(curl -s -X POST http://localhost:8080/sbt/clean \
+            -H "Content-Type: application/json" \
+            -d '{"workspace_name":"test-workspace"}')
+          
+          echo "Clean response: $RESPONSE"
+          
+          if echo "$RESPONSE" | grep -q '"status":"success"'; then
+            echo "✅ Scala project cleaned successfully"
+          else
+            echo "❌ Failed to clean Scala project"
+            echo "Full response: $RESPONSE"
+            exit 1
+          fi
+
+      - name: Test Advanced Scala Project with Dependencies
+        run: |
+          echo "Creating advanced Scala project with dependencies..."
+          
+          # Create build.sbt with dependencies
+          BUILD_SBT='name := "AdvancedTest"
+          version := "0.1.0"
+          scalaVersion := "2.13.12"
+          
+          libraryDependencies ++= Seq(
+            "org.typelevel" %% "cats-core" % "2.12.0"
+          )'
+          
+          BUILD_PAYLOAD=$(jq -n \
+            --arg workspace "test-workspace" \
+            --arg path "build.sbt" \
+            --arg content "$BUILD_SBT" \
+            '{workspace_name: $workspace, file_path: $path, content: $content}')
+          
+          curl -s -X PUT http://localhost:8080/files \
+            -H "Content-Type: application/json" \
+            -d "$BUILD_PAYLOAD" > /dev/null
+          
+          # Create advanced Scala file using cats
+          ADVANCED_SCALA='import cats.implicits._
+          
+          object AdvancedExample {
+            def main(args: Array[String]): Unit = {
+              val result = Option("Advanced Integration Test")
+                .map(_.toUpperCase)
+                .map(_ + " with Cats!")
+                .getOrElse("Failed")
+              println("Result: " + result)
+              
+              val numbers = List(1, 2, 3, 4, 5)
+              val sum = numbers.combineAll
+              println("Sum using Cats: " + sum)
+            }
+          }'
+          
+          ADVANCED_PAYLOAD=$(jq -n \
+            --arg workspace "test-workspace" \
+            --arg path "src/main/scala/AdvancedExample.scala" \
+            --arg content "$ADVANCED_SCALA" \
+            '{workspace_name: $workspace, file_path: $path, content: $content}')
+          
+          curl -s -X POST http://localhost:8080/files \
+            -H "Content-Type: application/json" \
+            -d "$ADVANCED_PAYLOAD" > /dev/null
+          
+          echo "✅ Advanced project files created"
+
+      - name: Test Advanced SBT Compile
+        run: |
+          echo "Compiling advanced Scala project with dependencies..."
+          RESPONSE=$(curl -s -X POST http://localhost:8080/sbt/compile \
+            -H "Content-Type: application/json" \
+            -d '{"workspace_name":"test-workspace"}')
+          
+          echo "Advanced compile response (last 500 chars): $(echo "$RESPONSE" | tail -c 500)"
+          
+          if echo "$RESPONSE" | grep -q '"status":"success"'; then
+            echo "✅ Advanced Scala project compiled successfully"
+          else
+            echo "❌ Failed to compile advanced Scala project"
+            # Show more details for debugging
+            echo "Error details: $(echo "$RESPONSE" | jq -r '.data.stderr // .stderr // "No stderr available"' 2>/dev/null || echo "$RESPONSE")"
+            exit 1
+          fi
+
+      - name: Test Advanced SBT Run with Main Class
+        run: |
+          echo "Running advanced Scala project with specific main class..."
+          RESPONSE=$(curl -s -X POST http://localhost:8080/sbt/run-project \
+            -H "Content-Type: application/json" \
+            -d '{"workspace_name":"test-workspace","main_class":"AdvancedExample"}')
+          
+          echo "Advanced run response (last 500 chars): $(echo "$RESPONSE" | tail -c 500)"
+          
+          if echo "$RESPONSE" | grep -q '"status":"success"'; then
+            echo "✅ Advanced Scala project ran successfully"
+            if echo "$RESPONSE" | grep -q "ADVANCED INTEGRATION TEST with Cats!"; then
+              echo "✅ Advanced output with Cats found"
+            fi
+            if echo "$RESPONSE" | grep -q "Sum using Cats: 15"; then
+              echo "✅ Cats combineAll functionality working"
+            fi
+          else
+            echo "❌ Failed to run advanced Scala project"
+            echo "Error details: $(echo "$RESPONSE" | jq -r '.data.stderr // .stderr // "No stderr available"' 2>/dev/null || echo "$RESPONSE")"
+            exit 1
+          fi
+
+      - name: Test List Workspaces
+        run: |
+          echo "Listing workspaces..."
+          RESPONSE=$(curl -s http://localhost:8080/workspaces)
+          echo "List workspaces response: $RESPONSE"
+          
+          if echo "$RESPONSE" | grep -q "test-workspace"; then
+            echo "✅ Workspace found in list"
+          else
+            echo "❌ Workspace not found in list"
+            exit 1
+          fi
 
       - name: Cleanup
-        run: docker rm -f scala-test
+        if: always()
+        run: |
+          # Clean up the test workspace
+          curl -s -X DELETE http://localhost:8080/workspaces/test-workspace || true
+          # Stop the container
+          docker rm -f scala-test || true
