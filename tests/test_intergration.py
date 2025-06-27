@@ -111,7 +111,7 @@ def test_workspace_with_dependencies():
     build_sbt = '''
 name := "Test Project"
 version := "0.1.0"
-scalaVersion := "2.13.12"
+scalaVersion := "2.13.14"
 
 libraryDependencies ++= Seq(
   "org.typelevel" %% "cats-core" % "2.12.0"
@@ -318,7 +318,7 @@ class CalculatorTest extends AnyFunSuite {
     build_sbt = '''
 name := "Test Project"
 version := "0.1.0"
-scalaVersion := "2.13.12"
+scalaVersion := "2.13.14"
 
 libraryDependencies ++= Seq(
   "org.scalatest" %% "scalatest" % "3.2.18" % Test
