@@ -43,8 +43,14 @@ class SBTRunner:
             raise ValueError(f"Invalid or potentially dangerous SBT command: {command}")
         
         # Build Docker command
-        # Split compound commands like "clean compile" into separate arguments
-        sbt_commands = command.split()
+        # Handle special commands that need to be passed as a single argument to SBT
+        if (command.startswith("runMain ") or command.startswith("testOnly ") or 
+            "runMain" in command or "testOnly" in command):
+            # For commands with runMain/testOnly, pass as a single argument to SBT
+            sbt_commands = [command]
+        else:
+            # Split compound commands like "clean compile" into separate arguments
+            sbt_commands = command.split()
         
         docker_cmd = [
             "docker", "run", "--rm",

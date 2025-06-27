@@ -84,7 +84,7 @@ object DirectIntegration {
     # Run SBT run
     resp = client.post(
         "/sbt/run-project",
-        json={"workspace_name": workspace_name},
+        json={"workspace_name": workspace_name, "main_class": "DirectIntegration"},
         timeout=120
     )
     assert resp.status_code == 200, resp.text
@@ -162,7 +162,7 @@ object CatsExample {
     
     resp = client.post(
         "/sbt/run-project",
-        json={"workspace_name": workspace_name},
+        json={"workspace_name": workspace_name, "main_class": "CatsExample"},
         timeout=120
     )
     assert resp.status_code == 200, resp.text
