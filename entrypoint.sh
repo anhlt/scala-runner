@@ -1,32 +1,34 @@
-#!/usr/bin/env sh
-set -eux
+#!/bin/bash
 
-# 1) Pull the Scala CLI image so it's cached on the node
+# Exit on any error
+set -e
 
-until docker info; do
-  echo "waiting for dockerd…"
-  sleep 1
-done
+echo "Starting Scala SBT Workspace API..."
 
-
-if ! docker pull virtuslab/scala-cli:latest; then
-  echo "Failed to pull Scala CLI image. Exiting."
-  exit 1
+# Check if Docker is available
+if ! command -v docker &> /dev/null; then
+    echo "Docker is not available. Please ensure Docker is installed and running."
+    exit 1
 fi
 
-# 2) Run Scala CLI to compile the Scala app
-echo 'println("hello")' > /tmp/hello.sc
+# Pre-pull the SBT Docker image to avoid delays during first run
+echo "Pulling SBT Docker image..."
+docker pull sbtscala/scala-sbt:eclipse-temurin-alpine-21.0.7_6_1.11.2_3.7.1 || {
+    echo "Warning: Failed to pull SBT Docker image. Commands may fail later."
+}
 
-if ! docker run --rm -v /tmp/:/tmp/   virtuslab/scala-cli:latest run /tmp/hello.sc --scala 2.13 --verbose --progress --platform=jvm; then
-  echo "Failed to compile Scala app. Exiting."
-  exit 1
-fi
+# Create necessary directories
+mkdir -p /tmp/workspaces
+mkdir -p /tmp/sbt-cache
+mkdir -p /tmp/ivy-cache
+mkdir -p /tmp/coursier-cache
+mkdir -p /tmp/search_index
 
-if ! docker run --rm -v /tmp/:/tmp/   virtuslab/scala-cli:latest run /tmp/hello.sc --scala 3.6.4 --verbose --progress --platform=jvm; then
-  echo "Failed to compile Scala app. Exiting."
-  exit 1
-fi
+# Set permissions
+chmod 755 /tmp/workspaces /tmp/sbt-cache /tmp/ivy-cache /tmp/coursier-cache /tmp/search_index
 
+echo "Directories created and permissions set."
 
-# 2) Exec into uvicorn (replaces this shell, preserves signals)
-exec uvicorn scala_runner.main:app --host 0.0.0.0 --port 80
+# Start the FastAPI server
+echo "Starting FastAPI server on 0.0.0.0:8000..."
+exec uvicorn scala_runner.main:app --host 0.0.0.0 --port 8000
