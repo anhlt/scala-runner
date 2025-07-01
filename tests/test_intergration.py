@@ -413,3 +413,253 @@ def test_complex_scala_project():
     
     # Clean up
     client.delete(f"/workspaces/{workspace_name}")
+
+@pytest.mark.integration
+def test_intensive_patch_api_integration():
+    """
+    Intensive integration test that utilizes the patch API to:
+    1. Create new project
+    2. Patch build.sbt
+    3. Patch main.scala using parse.scala file content
+    4. Run sbt compile
+    5. Verify result
+    6. Clean up
+    """
+    workspace_name = f"test-patch-workspace-{int(time.time()*1000)}-{random.randint(1000, 9999)}"
+    
+    try:
+        # Step 1: Create workspace
+        resp = client.post(
+            "/workspaces",
+            json={"name": workspace_name}
+        )
+        assert resp.status_code == 200, f"Failed to create workspace: {resp.text}"
+        
+        # Step 2: Patch build.sbt to add dependencies for the parse.scala project
+        # This patch creates a new build.sbt with Scala 3 and cats-parse dependency
+        build_sbt_patch = """--- /dev/null
++++ b/build.sbt
+@@ -0,0 +1,7 @@
++name := "ParseProject"
++version := "0.1.0"
++scalaVersion := "3.6.4"
++
++libraryDependencies ++= Seq(
++  "org.typelevel" %% "cats-parse" % "1.1.0"
++)"""
+        
+        resp = client.patch(
+            "/files",
+            json={
+                "workspace_name": workspace_name,
+                "patch": build_sbt_patch
+            }
+        )
+        assert resp.status_code == 200, f"Failed to patch build.sbt: {resp.text}"
+        build_result = resp.json()
+        assert build_result["status"] == "success"
+        assert build_result["data"]["patch_applied"] == True
+        assert len(build_result["data"]["results"]["modified_files"]) == 1
+        assert build_result["data"]["results"]["modified_files"][0]["file_path"] == "build.sbt"
+        assert build_result["data"]["results"]["modified_files"][0]["status"] == "success"
+        
+        # Step 3: Patch main.scala using content from parse.scala
+        # First create an empty Main.scala, then patch it to contain the parse.scala content
+        empty_main_patch = """--- /dev/null
++++ b/src/main/scala/Main.scala
+@@ -0,0 +1,3 @@
++object Main {
++  def main(args: Array[String]): Unit = println("Hello")
++}"""
+        
+        resp = client.patch(
+            "/files",
+            json={
+                "workspace_name": workspace_name,
+                "patch": empty_main_patch
+            }
+        )
+        assert resp.status_code == 200, f"Failed to create initial Main.scala: {resp.text}"
+        
+        # Now patch Main.scala to replace with parse.scala content
+        # Create a patch that replaces the entire Main.scala content with parse.scala content
+        main_scala_patch = """--- a/src/main/scala/Main.scala
++++ b/src/main/scala/Main.scala
+@@ -1,3 +1,96 @@
+-object Main {
+-  def main(args: Array[String]): Unit = println("Hello")
+-}
++//> using scala "3.6.4"
++//> using dep "org.typelevel::cats-parse:1.1.0"
++
++import cats.parse.{Parser, Parser0}
++import cats.parse.Rfc5234.{alpha, digit}
++
++// --- AST ------------------------------------------------------------
++enum SqlType:
++  case IntType
++  case Varchar(length: Int)
++  case TextType
++
++case class ColumnDef(
++  name: String,
++  tpe: SqlType,
++  default: Option[String]
++)
++case class CreateTable(
++  tableName: String,
++  columns: List[ColumnDef]
++)
++
++// --- Lexing Helpers (allow newline whitespace) ----------------------
++object SQL:
++  private val wspChars = " \t\r\n"
++  val wsp0: Parser0[Unit] = Parser.charIn(wspChars).rep0.void
++  val wsp:  Parser[Unit]  = Parser.charIn(wspChars).rep.void
++
++  val ident: Parser[String] =
++    ((Parser.charIn('_') | alpha) ~ (Parser.charIn('_') | alpha | digit).rep0)
++      .string
++      .surroundedBy(wsp0)
++
++  def kw(s: String): Parser[Unit] =
++    Parser.string(s).surroundedBy(wsp0)
++
++  val intLit: Parser[Int] =
++    digit.rep.string.map(_.toInt).surroundedBy(wsp0)
++
++// --- SQL-Type Parsers ----------------------------------------------
++object SqlTypeParser:
++  import SQL._
++  val intType:    Parser[SqlType] = kw("INT").as(SqlType.IntType)
++  val varcharType: Parser[SqlType] =
++    (kw("VARCHAR") *> Parser.char('(').surroundedBy(wsp0) *> SQL.intLit <* Parser.char(')').surroundedBy(wsp0))
++      .map(SqlType.Varchar.apply(_))
++  val textType:   Parser[SqlType] = kw("TEXT").as(SqlType.TextType)
++  val sqlType:    Parser[SqlType] = Parser.oneOf(List(varcharType, intType, textType))
++
++// --- Column Definition Parser -------------------------------------
++object ColumnParser:
++  import SQL.*, SqlTypeParser._
++
++  private val strLit: Parser[String] =
++    (Parser.char('\\'') *> Parser.charWhere(_ != '\\'').rep.string <* Parser.char('\\''))
++      .surroundedBy(wsp0)
++
++  private val defaultVal: Parser[String] =
++    Parser.oneOf(List(strLit, SQL.intLit.map(_.toString)))
++
++  val columnDef: Parser[ColumnDef] =
++    (ident ~ sqlType ~ (kw("DEFAULT") *> defaultVal).?)
++      .map { case ((name, tpe), dflt) => ColumnDef(name, tpe, dflt) }
++      .surroundedBy(wsp0)
++
++// --- CREATE TABLE Parser -------------------------------------------
++object CreateTableParser:
++  import SQL.*, ColumnParser.*
++
++  val commaSep: Parser0[List[ColumnDef]] =
++    columnDef.repSep0(Parser.char(',').surroundedBy(wsp0))
++
++  val createTable: Parser[CreateTable] = for
++    _     <- kw("CREATE")
++    _     <- kw("TABLE")
++    name  <- ident
++    _     <- Parser.char('(').surroundedBy(wsp0)
++    cols  <- commaSep
++    _     <- Parser.char(')').surroundedBy(wsp0)
++    _semi <- Parser.char(';').?
++  yield CreateTable(name, cols)
++
++// --- Main & Test ---------------------------------------------------
++@main def runParser(): Unit =
++  val input =
++    \"\"\"
++      |CREATE TABLE users (
++      |  id    INT DEFAULT 0,
++      |  name  VARCHAR(100) DEFAULT 'anonymous',
++      |  bio   TEXT
++      |);
++    \"\"\".stripMargin.trim
++
++  CreateTableParser.createTable.parseAll(input) match
++    case Right(ct) => println(s"✅ Parsed AST: $ct")
++    case Left(err) => println(s"❌ Parse error: $err")"""
+        
+        resp = client.patch(
+            "/files",
+            json={
+                "workspace_name": workspace_name,
+                "patch": main_scala_patch
+            }
+        )
+        assert resp.status_code == 200, f"Failed to patch Main.scala with parse content: {resp.text}"
+        main_result = resp.json()
+        assert main_result["status"] == "success"
+        assert main_result["data"]["patch_applied"] == True
+        assert len(main_result["data"]["results"]["modified_files"]) == 1
+        assert main_result["data"]["results"]["modified_files"][0]["file_path"] == "src/main/scala/Main.scala"
+        assert main_result["data"]["results"]["modified_files"][0]["status"] == "success"
+        
+        # Step 4: Run sbt compile to verify the patched project compiles successfully
+        resp = client.post(
+            "/sbt/compile",
+            json={"workspace_name": workspace_name},
+            timeout=180  # Increased timeout for dependency download and compilation
+        )
+        assert resp.status_code == 200, f"SBT compile failed: {resp.text}"
+        compile_result = resp.json()
+        assert compile_result["status"] == "success", f"Compilation failed: {compile_result}"
+        
+        # Step 5: Verify the result by running the project
+        resp = client.post(
+            "/sbt/run-project",
+            json={"workspace_name": workspace_name, "main_class": "runParser"},
+            timeout=120
+        )
+        assert resp.status_code == 200, f"SBT run failed: {resp.text}"
+        run_result = resp.json()
+        assert run_result["status"] == "success", f"Run failed: {run_result}"
+        
+        # Verify the output contains expected parsing results
+        output = run_result["data"]["output"]
+        assert "✅ Parsed AST:" in output, f"Expected parsing success message not found in output: {output}"
+        assert "CreateTable" in output, f"Expected CreateTable AST not found in output: {output}"
+        assert "users" in output, f"Expected table name 'users' not found in output: {output}"
+        
+        # Additional verification: Check that files were actually created and contain expected content
+        resp = client.get(f"/files/{workspace_name}/build.sbt")
+        assert resp.status_code == 200, "Failed to read build.sbt"
+        build_content = resp.json()["data"]["content"]
+        assert "cats-parse" in build_content, "cats-parse dependency not found in build.sbt"
+        assert "3.6.4" in build_content, "Scala 3.6.4 version not found in build.sbt"
+        
+        resp = client.get(f"/files/{workspace_name}/src/main/scala/Main.scala")
+        assert resp.status_code == 200, "Failed to read Main.scala"
+        main_content = resp.json()["data"]["content"]
+        assert "@main def runParser" in main_content, "Main function not found in Main.scala"
+        assert "CreateTableParser" in main_content, "Parser code not found in Main.scala"
+        
+        # Test clean command
+        resp = client.post(
+            "/sbt/clean",
+            json={"workspace_name": workspace_name},
+            timeout=60
+        )
+        assert resp.status_code == 200, f"SBT clean failed: {resp.text}"
+        clean_result = resp.json()
+        assert clean_result["status"] == "success", f"Clean failed: {clean_result}"
+        
+        print(f"✅ Intensive patch API integration test completed successfully for workspace: {workspace_name}")
+        
+    except Exception as e:
+        print(f"❌ Test failed with error: {e}")
+        raise
+    finally:
+        # Step 6: Clean up - delete workspace
+        try:
+            resp = client.delete(f"/workspaces/{workspace_name}")
+            if resp.status_code != 200:
+                print(f"Warning: Failed to cleanup workspace {workspace_name}: {resp.text}")
+        except Exception as cleanup_error:
+            print(f"Warning: Cleanup failed: {cleanup_error}")

@@ -2,6 +2,16 @@
 
 A FastAPI-based service for managing Scala SBT project workspaces with Docker integration. This API allows you to create and manage multiple SBT project workspaces, perform file operations, search through code, and execute SBT commands via Docker containers.
 
+## 📚 Documentation
+
+For comprehensive documentation, visit the **[docs/](./docs/)** directory:
+
+- **[API Documentation](./docs/api/)** - LLM usage guides, API references
+- **[Features](./docs/features/)** - Auto cleanup, bash sessions, Scala 3 testing
+- **[Architecture](./docs/architecture/)** - System design and organization
+
+👉 **Quick Start**: [LLM Usage Guide](./docs/api/LLM_USAGE_GUIDE.md) for tool integration
+
 ## Features
 
 - **Workspace Management**: Create, list, and delete SBT project workspaces
