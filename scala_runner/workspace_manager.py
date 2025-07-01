@@ -132,8 +132,14 @@ lazy val root = (project in file("."))
         logger.info(f"Deleted workspace: {workspace_name}")
         return {"workspace_name": workspace_name, "deleted": True}
 
-    async def get_file_tree(self, workspace_name: str) -> Dict:
-        """Get file tree structure for a workspace"""
+    async def get_file_tree(self, workspace_name: str, show_all: bool = False) -> Dict:
+        """Get file tree structure for a workspace
+        
+        Args:
+            workspace_name: Name of the workspace
+            show_all: If False (default), filters out compiler-generated files and build artifacts.
+                     If True, shows all files including .git, target/, .bsp/, etc.
+        """
         workspace_path = self.workspaces_dir / workspace_name
         
         if not workspace_path.exists():
@@ -141,11 +147,68 @@ lazy val root = (project in file("."))
         
         return {
             "workspace_name": workspace_name,
-            "tree": self._build_tree(workspace_path, workspace_path)
+            "tree": self._build_tree(workspace_path, workspace_path, show_all=show_all)
         }
 
-    def _build_tree(self, path: Path, root_path: Path) -> Dict:
-        """Build a tree structure recursively"""
+    def _should_exclude_from_tree(self, path: Path) -> bool:
+        """
+        Check if a file or directory should be excluded from the file tree.
+        Excludes compiler-generated files, build artifacts, and IDE-specific files.
+        """
+        name = path.name
+        
+        # Directory exclusions
+        if path.is_dir():
+            # SBT/Scala build directories
+            if name in {'target', '.bsp', '.bloop', '.metals', '.ammonite'}:
+                return True
+            # IDE directories
+            if name in {'.idea', '.vscode', '.eclipse', '.settings'}:
+                return True
+            # Version control (optional - you might want to show .git)
+            if name in {'.git', '.svn', '.hg'}:
+                return True
+            # OS-specific directories
+            if name in {'.DS_Store', '__pycache__', '.pytest_cache'}:
+                return True
+            # Nested project directories that are usually generated
+            if name == 'project' and (path.parent / 'project' / 'target').exists():
+                # Check if this project directory has a target subdirectory (generated)
+                if (path / 'target').exists():
+                    return True
+        
+        # File exclusions
+        else:
+            # Compiled files
+            if name.endswith(('.class', '.jar', '.tasty')):
+                return True
+            # Log files
+            if name.endswith(('.log', '.out')):
+                return True
+            # Temporary files
+            if name.endswith(('.tmp', '.temp', '.swp', '.swo', '~')):
+                return True
+            # OS-specific files
+            if name in {'.DS_Store', 'Thumbs.db', 'desktop.ini'}:
+                return True
+            # IDE-specific files
+            if name.endswith(('.iml', '.ipr', '.iws')):
+                return True
+            # Backup files
+            if name.startswith('.#') or name.endswith('#'):
+                return True
+        
+        return False
+
+    def _build_tree(self, path: Path, root_path: Path, show_all: bool = False) -> Dict:
+        """Build a tree structure recursively, optionally excluding compiler-generated files
+        
+        Args:
+            path: Current path being processed
+            root_path: Root path of the workspace
+            show_all: If False, filters out compiler-generated files and build artifacts.
+                     If True, shows all files.
+        """
         relative_path = path.relative_to(root_path) if path != root_path else Path(".")
         
         result = {
@@ -158,7 +221,9 @@ lazy val root = (project in file("."))
             children = []
             try:
                 for child in sorted(path.iterdir()):
-                    children.append(self._build_tree(child, root_path))
+                    # Skip excluded files and directories only if show_all is False
+                    if show_all or not self._should_exclude_from_tree(child):
+                        children.append(self._build_tree(child, root_path, show_all=show_all))
                 result["children"] = children
             except PermissionError:
                 result["error"] = "Permission denied"
@@ -274,6 +339,22 @@ lazy val root = (project in file("."))
         
         if not workspace_path.exists():
             raise ValueError(f"Workspace '{workspace_name}' not found")
+        
+        # Validate patch syntax first
+        syntax_validation = self._validate_patch_syntax(patch_content)
+        if not syntax_validation["valid"]:
+            logger.error(f"Patch syntax error: {syntax_validation['error']}")
+            return {
+                "workspace_name": workspace_name,
+                "patch_applied": False,
+                "error_code": syntax_validation["error_code"],
+                "error_message": syntax_validation["error"],
+                "results": {
+                    "modified_files": [],
+                    "total_files": 0,
+                    "successful_files": 0
+                }
+            }
         
         # Parse the unified diff
         try:
@@ -399,6 +480,128 @@ lazy val root = (project in file("."))
                 "new_count": new_count
             }
         return None
+
+    def _validate_patch_syntax(self, patch_content: str) -> Dict:
+        """Validate patch syntax and return error details if invalid"""
+        if not patch_content or not patch_content.strip():
+            return {
+                "valid": True,  # Empty patches are considered valid (no-op)
+                "error": None,
+                "error_code": None
+            }
+        
+        lines = patch_content.strip().split('\n')
+        
+        # Check for basic patch structure
+        has_file_headers = False
+        has_valid_hunks = False
+        current_file_old = None
+        current_file_new = None
+        in_hunk = False
+        hunk_line_count = 0
+        expected_old_lines = 0
+        expected_new_lines = 0
+        actual_old_lines = 0
+        actual_new_lines = 0
+        
+        for i, line in enumerate(lines):
+            # Check for file headers
+            if line.startswith('--- '):
+                if len(line) < 5:
+                    return {
+                        "valid": False,
+                        "error": f"Invalid old file header at line {i+1}: '{line}'",
+                        "error_code": "INVALID_OLD_FILE_HEADER"
+                    }
+                current_file_old = line[4:].strip()
+                has_file_headers = True
+                in_hunk = False
+                
+            elif line.startswith('+++ '):
+                if not current_file_old:
+                    return {
+                        "valid": False,
+                        "error": f"New file header without old file header at line {i+1}",
+                        "error_code": "MISSING_OLD_FILE_HEADER"
+                    }
+                if len(line) < 5:
+                    return {
+                        "valid": False,
+                        "error": f"Invalid new file header at line {i+1}: '{line}'",
+                        "error_code": "INVALID_NEW_FILE_HEADER"
+                    }
+                current_file_new = line[4:].strip()
+                
+            elif line.startswith('@@'):
+                if not current_file_old or not current_file_new:
+                    return {
+                        "valid": False,
+                        "error": f"Hunk header without file headers at line {i+1}",
+                        "error_code": "MISSING_FILE_HEADERS"
+                    }
+                
+                # Validate hunk header syntax
+                hunk_info = self._parse_hunk_header(line)
+                if not hunk_info:
+                    return {
+                        "valid": False,
+                        "error": f"Invalid hunk header format at line {i+1}: '{line}'",
+                        "error_code": "INVALID_HUNK_HEADER"
+                    }
+                
+                # Reset counters for new hunk
+                expected_old_lines = hunk_info["old_count"]
+                expected_new_lines = hunk_info["new_count"]
+                actual_old_lines = 0
+                actual_new_lines = 0
+                in_hunk = True
+                has_valid_hunks = True
+                
+            elif in_hunk and line:
+                # Validate hunk content lines
+                if len(line) == 0:
+                    continue
+                    
+                prefix = line[0]
+                if prefix not in [' ', '+', '-', '\\']:
+                    return {
+                        "valid": False,
+                        "error": f"Invalid line prefix '{prefix}' at line {i+1}: '{line}'",
+                        "error_code": "INVALID_LINE_PREFIX"
+                    }
+                
+                # Count lines for hunk validation
+                if prefix == ' ':
+                    actual_old_lines += 1
+                    actual_new_lines += 1
+                elif prefix == '-':
+                    actual_old_lines += 1
+                elif prefix == '+':
+                    actual_new_lines += 1
+                # '\\' lines (like "\ No newline at end of file") don't count
+        
+        # If we found file headers but no hunks, that might be valid (empty patch)
+        if has_file_headers and not has_valid_hunks:
+            # Check if this is just an empty patch (file headers but no content changes)
+            return {
+                "valid": True,
+                "error": None,
+                "error_code": None
+            }
+        
+        # If we have content but no proper file headers
+        if not has_file_headers and any(line.strip() for line in lines):
+            return {
+                "valid": False,
+                "error": "Patch content found but no valid file headers (--- and +++) detected",
+                "error_code": "MISSING_FILE_HEADERS"
+            }
+        
+        return {
+            "valid": True,
+            "error": None,
+            "error_code": None
+        }
 
     async def _apply_hunk(self, workspace_path: Path, file_path: str, hunk_info: Dict, hunk_lines: List[str]) -> bool:
         """Apply a single hunk to a file"""

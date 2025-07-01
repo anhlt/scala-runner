@@ -2,6 +2,16 @@
 
 A FastAPI-based service for managing Scala SBT project workspaces with Docker integration. This API allows you to create and manage multiple SBT project workspaces, perform file operations, search through code, and execute SBT commands via Docker containers.
 
+## 📚 Documentation
+
+For comprehensive documentation, visit the **[docs/](./docs/)** directory:
+
+- **[API Documentation](./docs/api/)** - LLM usage guides, API references
+- **[Features](./docs/features/)** - Auto cleanup, bash sessions, Scala 3 testing
+- **[Architecture](./docs/architecture/)** - System design and organization
+
+👉 **Quick Start**: [LLM Usage Guide](./docs/api/LLM_USAGE_GUIDE.md) for tool integration
+
 ## Features
 
 - **Workspace Management**: Create, list, and delete SBT project workspaces
@@ -134,6 +144,51 @@ DELETE /workspaces/{workspace_name}
 #### Get Workspace File Tree
 ```bash
 GET /workspaces/{workspace_name}/tree
+```
+Get the file tree structure of a workspace (like 'tree' command).
+
+**Query Parameters:**
+- `show_all` (boolean, optional): 
+  - `false` (default): Filters out compiler-generated files and build artifacts like `target/`, `.bsp/`, `.idea/`, `*.class`, `*.log`, etc.
+  - `true`: Shows all files including hidden and generated files
+
+**Examples:**
+```bash
+# Get filtered tree (recommended for development)
+GET /workspaces/my-project/tree
+
+# Get complete tree including all files
+GET /workspaces/my-project/tree?show_all=true
+```
+
+**Filtered file types and directories:**
+- Build directories: `target/`, `.bsp/`, `.bloop/`, `.metals/`
+- IDE directories: `.idea/`, `.vscode/`, `.eclipse/`
+- Version control: `.git/`, `.svn/`, `.hg/`
+- Compiled files: `*.class`, `*.jar`, `*.tasty`
+- Log files: `*.log`, `*.out`
+- Temporary files: `*.tmp`, `*.temp`, `*~`
+- Backup files: `.#*`, `*#`
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": {
+    "workspace_name": "my-project",
+    "tree": {
+      "name": ".",
+      "type": "directory",
+      "children": [
+        {
+          "name": "src",
+          "type": "directory",
+          "children": [...]
+        }
+      ]
+    }
+  }
+}
 ```
 
 #### Get Git Repository Information
@@ -577,12 +632,52 @@ curl -X GET "http://localhost:8000/git/log/my-project?limit=5"
 
 ## Development
 
-### Running Tests
+### Docker Context Setup
+
+For optimal testing on ARM-based systems (like Apple Silicon), use the `colima-arm` Docker context:
+
 ```bash
-pytest tests/
+# Quick setup
+./scripts/setup-docker-context.sh
+
+# Manual setup
+docker context use colima-arm
+unset DOCKER_HOST
 ```
 
-### API Documentation
+### Running Tests
+
+```bash
+# Run workspace and file tree tests
+python -m pytest tests/test_workspace_manager.py tests/test_intergration.py::test_workspace_file_tree* -v
+
+# Run all tests
+python -m pytest tests/ -v
+```
+
+### File Tree Filtering
+
+The workspace tree API now intelligently filters out compiler-generated files by default:
+
+**Filtered items:**
+- Build directories: `target/`, `.bsp/`, `.bloop/`, `.metals/`  
+- IDE files: `.idea/`, `.vscode/`, `*.iml`
+- Compiled files: `*.class`, `*.jar`, `*.tasty`
+- Log/temp files: `*.log`, `*.tmp`, `*~`
+
+**Usage:**
+```bash
+# Filtered view (default)
+GET /workspaces/{name}/tree
+
+# Show all files  
+GET /workspaces/{name}/tree?show_all=true
+```
+
+---
+
+## �� API Documentation
+
 Once the server is running, visit:
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
