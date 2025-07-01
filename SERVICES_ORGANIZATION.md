@@ -80,9 +80,10 @@ Handles SBT build tool operations:
 - `POST /sbt/clean` - Clean build artifacts
 - `GET /sbt/project-info/{workspace_name}` - Get project info
 
-### 6. Bash Sessions Service (`/bash`)
+### 6. Bash Sessions Service (`/bash`) - *Hidden from OpenAPI*
 **Module**: `scala_runner/routers/bash.py`
 **Tag**: `bash`
+**Note**: *These endpoints are excluded from the OpenAPI schema but remain functional*
 
 Handles interactive bash session management:
 - `POST /bash/sessions` - Create bash session
@@ -113,6 +114,7 @@ Handles utility endpoints:
 4. **Better Testing**: Individual service modules can be tested in isolation
 5. **Clearer API Documentation**: OpenAPI schema is organized by service tags
 6. **Easier Development**: New endpoints can be added to appropriate service modules
+7. **Flexible API Exposure**: Some services (like bash sessions) can be hidden from public documentation while remaining functional
 
 ## Implementation Details
 
@@ -121,6 +123,7 @@ Handles utility endpoints:
 - Rate limiting is applied consistently across all endpoints
 - Error handling patterns are maintained from the original implementation
 - The main FastAPI app registers all routers and handles application lifecycle
+- Bash session endpoints are excluded from OpenAPI schema (`include_in_schema=False`) but remain fully functional
 
 ## Usage
 

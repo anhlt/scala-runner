@@ -103,7 +103,7 @@ app.include_router(git_router)
 app.include_router(files_router)
 app.include_router(search_router)
 app.include_router(sbt_router)
-app.include_router(bash_router)
+app.include_router(bash_router, include_in_schema=False)  # Exclude bash APIs from OpenAPI schema
 app.include_router(utils_router)
 
 # Update the openapi endpoint in utils router to return actual schema
