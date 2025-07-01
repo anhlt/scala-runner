@@ -53,6 +53,23 @@ app = FastAPI(
     description="Manage SBT workspaces and run SBT commands via Docker",
     version="0.2.0",
 )
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background services when the application starts"""
+    if bash_session_manager.auto_cleanup_enabled:
+        result = await bash_session_manager.start_auto_cleanup()
+        logger.info(f"Application startup: Auto-cleanup task {result.get('status', 'unknown')}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up background services when the application shuts down"""
+    result = await bash_session_manager.stop_auto_cleanup()
+    logger.info(f"Application shutdown: Auto-cleanup task {result.get('status', 'unknown')}")
+    
+    # Close any remaining sessions
+    cleanup_result = await bash_session_manager.cleanup_inactive_sessions()
+    logger.info(f"Application shutdown: Cleaned up {cleanup_result.get('cleaned_sessions', 0)} sessions")
 # register the exception handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -203,6 +220,24 @@ class CloseBashSessionRequest(BaseModel):
         if not v or len(v.strip()) == 0:
             raise ValueError("Session ID cannot be empty")
         return v.strip()
+
+
+class ConfigureCleanupRequest(BaseModel):
+    session_timeout: Optional[int] = None
+    cleanup_interval: Optional[int] = None
+    auto_cleanup_enabled: Optional[bool] = None
+
+    @field_validator("session_timeout")
+    def validate_session_timeout(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v <= 0:
+            raise ValueError("Session timeout must be positive")
+        return v
+
+    @field_validator("cleanup_interval")
+    def validate_cleanup_interval(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v <= 0:
+            raise ValueError("Cleanup interval must be positive")
+        return v
 
 
 # Workspace Management Endpoints
@@ -719,6 +754,60 @@ async def cleanup_bash_sessions(request: Request):
         return JSONResponse({"status": "success", "data": result})
     except Exception as e:
         logger.error(f"Error cleaning up bash sessions: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.post("/bash/auto-cleanup/start", summary="Start automatic cleanup of inactive bash sessions")
+@limiter.limit(RATE_LIMIT)
+async def start_auto_cleanup(request: Request):
+    """Start the automatic cleanup background task for inactive bash sessions"""
+    try:
+        result = await bash_session_manager.start_auto_cleanup()
+        return JSONResponse({"status": "success", "data": result})
+    except Exception as e:
+        logger.error(f"Error starting auto-cleanup: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.post("/bash/auto-cleanup/stop", summary="Stop automatic cleanup of inactive bash sessions")
+@limiter.limit(RATE_LIMIT)
+async def stop_auto_cleanup(request: Request):
+    """Stop the automatic cleanup background task for inactive bash sessions"""
+    try:
+        result = await bash_session_manager.stop_auto_cleanup()
+        return JSONResponse({"status": "success", "data": result})
+    except Exception as e:
+        logger.error(f"Error stopping auto-cleanup: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.put("/bash/auto-cleanup/configure", summary="Configure automatic cleanup settings")
+@limiter.limit(RATE_LIMIT)
+async def configure_auto_cleanup(request: Request, payload: ConfigureCleanupRequest):
+    """Configure automatic cleanup settings (timeout, interval, enabled)"""
+    try:
+        result = bash_session_manager.configure_cleanup(
+            session_timeout=payload.session_timeout,
+            cleanup_interval=payload.cleanup_interval,
+            auto_cleanup_enabled=payload.auto_cleanup_enabled
+        )
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Error configuring auto-cleanup: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.get("/bash/auto-cleanup/stats", summary="Get automatic cleanup statistics")
+@limiter.limit(RATE_LIMIT)
+async def get_auto_cleanup_stats(request: Request):
+    """Get automatic cleanup configuration and statistics"""
+    try:
+        result = bash_session_manager.get_cleanup_stats()
+        return JSONResponse({"status": "success", "data": result})
+    except Exception as e:
+        logger.error(f"Error getting auto-cleanup stats: {e}")
         raise HTTPException(500, f"Internal server error: {str(e)}")
 
 
