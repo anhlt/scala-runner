@@ -273,14 +273,26 @@ class Tools:
     async def get_workspace_tree(
         self,
         workspace_name: str,
+        show_all: bool = False,
         __event_emitter__: Optional[Callable[[Dict], None]] = None,
     ) -> Union[Dict, Dict[str, str]]:
-        """Get the file tree structure of a workspace"""
+        """Get the file tree structure of a workspace
+        
+        Args:
+            workspace_name: Name of the workspace
+            show_all: If False (default), filters out compiler-generated files and build artifacts.
+                     If True, shows all files including .git, target/, .bsp/, etc.
+        """
         await _emit(__event_emitter__, f"Getting file tree for '{workspace_name}'…")
         try:
+            params = {}
+            if show_all:
+                params["show_all"] = True
+                
             async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
                 resp = await client.get(
                     f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspaces/{workspace_name}/tree",
+                    params=params,
                     headers=_build_headers(),
                 )
             resp.raise_for_status()

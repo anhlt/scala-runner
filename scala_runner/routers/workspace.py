@@ -109,10 +109,16 @@ async def delete_workspace(request: Request, workspace_name: str):
 
 @router.get("/{workspace_name}/tree", summary="Get workspace file tree")
 @limiter.limit(RATE_LIMIT)
-async def get_workspace_tree(request: Request, workspace_name: str):
-    """Get the file tree structure of a workspace (like 'tree' command)"""
+async def get_workspace_tree(request: Request, workspace_name: str, show_all: bool = False):
+    """Get the file tree structure of a workspace (like 'tree' command)
+    
+    Args:
+        workspace_name: Name of the workspace
+        show_all: If False (default), filters out compiler-generated files and build artifacts.
+                 If True, shows all files including .git, target/, .bsp/, etc.
+    """
     try:
-        result = await workspace_manager.get_file_tree(workspace_name)
+        result = await workspace_manager.get_file_tree(workspace_name, show_all=show_all)
         return JSONResponse({"status": "success", "data": result})
     except ValueError as e:
         raise HTTPException(404, str(e))

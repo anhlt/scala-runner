@@ -260,6 +260,80 @@ class TestWorkspaceManager:
         assert not workspace_manager._is_safe_file_path("")
         assert not workspace_manager._is_safe_file_path("a" * 501)  # Too long
 
+    @pytest.mark.asyncio
+    async def test_get_file_tree_filtering(self, workspace_manager):
+        """Test file tree filtering functionality"""
+        workspace_name = "test-workspace-filtering"
+        await workspace_manager.create_workspace(workspace_name)
+        workspace_path = workspace_manager.get_workspace_path(workspace_name)
+        
+        # Create some regular files
+        (workspace_path / "src" / "main" / "scala").mkdir(parents=True, exist_ok=True)
+        (workspace_path / "src" / "main" / "scala" / "Main.scala").write_text("object Main")
+        (workspace_path / "README.md").write_text("# Project")
+        
+        # Create some files that should be filtered out
+        (workspace_path / "target").mkdir(exist_ok=True)
+        (workspace_path / "target" / "scala-2.13").mkdir(exist_ok=True)
+        (workspace_path / "target" / "scala-2.13" / "classes").mkdir(exist_ok=True)
+        (workspace_path / "target" / "scala-2.13" / "classes" / "Main.class").write_text("compiled")
+        
+        (workspace_path / ".bsp").mkdir(exist_ok=True)
+        (workspace_path / ".bsp" / "sbt.json").write_text('{"name": "sbt"}')
+        
+        (workspace_path / ".idea").mkdir(exist_ok=True)
+        (workspace_path / ".idea" / "workspace.xml").write_text("<xml/>")
+        
+        (workspace_path / "build.log").write_text("log content")
+        (workspace_path / "temp.tmp").write_text("temporary")
+        
+        # Test with filtering (default: show_all=False)
+        result_filtered = await workspace_manager.get_file_tree(workspace_name, show_all=False)
+        tree_filtered = result_filtered["tree"]
+        
+        # Test with show_all=True
+        result_all = await workspace_manager.get_file_tree(workspace_name, show_all=True)
+        tree_all = result_all["tree"]
+        
+        # Helper function to get all file/directory names recursively
+        def get_all_names(tree):
+            names = {tree["name"]}
+            if "children" in tree:
+                for child in tree["children"]:
+                    names.update(get_all_names(child))
+            return names
+        
+        names_filtered = get_all_names(tree_filtered)
+        names_all = get_all_names(tree_all)
+        
+        # With filtering, these should be present
+        assert "src" in names_filtered
+        assert "Main.scala" in names_filtered
+        assert "README.md" in names_filtered
+        
+        # With filtering, these should be excluded
+        assert "target" not in names_filtered
+        assert ".bsp" not in names_filtered
+        assert ".idea" not in names_filtered
+        assert "build.log" not in names_filtered
+        assert "temp.tmp" not in names_filtered
+        assert "Main.class" not in names_filtered
+        
+        # With show_all=True, everything should be present
+        assert "src" in names_all
+        assert "Main.scala" in names_all
+        assert "README.md" in names_all
+        assert "target" in names_all
+        assert ".bsp" in names_all
+        assert ".idea" in names_all
+        assert "build.log" in names_all
+        assert "temp.tmp" in names_all
+        assert "Main.class" in names_all
+        
+        print(f"Filtered tree names: {names_filtered}")
+        print(f"All tree names: {names_all}")
+        print(f"Filtered out {len(names_all) - len(names_filtered)} items")
+
 
 class TestGitOperations:
     """Test suite for Git operations"""

@@ -663,3 +663,84 @@ def test_intensive_patch_api_integration():
                 print(f"Warning: Failed to cleanup workspace {workspace_name}: {resp.text}")
         except Exception as cleanup_error:
             print(f"Warning: Cleanup failed: {cleanup_error}")
+
+@pytest.mark.integration
+def test_workspace_file_tree_filtering():
+    """Test workspace file tree filtering functionality via API"""
+    workspace_name = f"test-workspace-filter-{int(time.time()*1000)}-{random.randint(1000, 9999)}"
+    
+    # Create workspace
+    resp = client.post(
+        "/workspaces",
+        json={"name": workspace_name}
+    )
+    assert resp.status_code == 200, resp.text
+    
+    # Create some files that should be filtered
+    files = [
+        ("src/main/scala/Main.scala", "object Main { def main(args: Array[String]): Unit = println(\"Hello\") }"),
+        ("README.md", "# Test Project"),
+        ("target/classes/Main.class", "compiled bytecode"),  # Should be filtered
+        (".bsp/sbt.json", '{"name": "sbt"}'),  # Should be filtered
+        ("build.log", "compilation log"),  # Should be filtered
+    ]
+    
+    for path, content in files:
+        resp = client.put(
+            "/files",
+            json={
+                "workspace_name": workspace_name,
+                "file_path": path,
+                "content": content
+            }
+        )
+        assert resp.status_code == 200, resp.text
+    
+    # Test with default filtering (show_all=False)
+    resp = client.get(f"/workspaces/{workspace_name}/tree")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    
+    # Helper function to collect all names in tree
+    def collect_names(tree):
+        names = {tree["name"]}
+        if "children" in tree:
+            for child in tree["children"]:
+                names.update(collect_names(child))
+        return names
+    
+    filtered_names = collect_names(body["data"]["tree"])
+    
+    # Should include regular files
+    assert "Main.scala" in filtered_names
+    assert "README.md" in filtered_names
+    assert "src" in filtered_names
+    
+    # Should exclude filtered files/directories
+    assert "target" not in filtered_names
+    assert ".bsp" not in filtered_names
+    assert "build.log" not in filtered_names
+    assert "Main.class" not in filtered_names
+    
+    # Test with show_all=True
+    resp = client.get(f"/workspaces/{workspace_name}/tree?show_all=true")
+    assert resp.status_code == 200, resp.text
+    body_all = resp.json()
+    
+    all_names = collect_names(body_all["data"]["tree"])
+    
+    # Should include everything
+    assert "Main.scala" in all_names
+    assert "README.md" in all_names
+    assert "src" in all_names
+    assert "target" in all_names
+    assert ".bsp" in all_names
+    assert "build.log" in all_names
+    assert "Main.class" in all_names
+    
+    print(f"Filtered names: {filtered_names}")
+    print(f"All names: {all_names}")
+    print(f"Filtered count: {len(all_names) - len(filtered_names)}")
+    
+    # Clean up
+    client.delete(f"/workspaces/{workspace_name}")

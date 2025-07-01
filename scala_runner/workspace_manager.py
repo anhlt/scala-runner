@@ -132,8 +132,14 @@ lazy val root = (project in file("."))
         logger.info(f"Deleted workspace: {workspace_name}")
         return {"workspace_name": workspace_name, "deleted": True}
 
-    async def get_file_tree(self, workspace_name: str) -> Dict:
-        """Get file tree structure for a workspace"""
+    async def get_file_tree(self, workspace_name: str, show_all: bool = False) -> Dict:
+        """Get file tree structure for a workspace
+        
+        Args:
+            workspace_name: Name of the workspace
+            show_all: If False (default), filters out compiler-generated files and build artifacts.
+                     If True, shows all files including .git, target/, .bsp/, etc.
+        """
         workspace_path = self.workspaces_dir / workspace_name
         
         if not workspace_path.exists():
@@ -141,11 +147,68 @@ lazy val root = (project in file("."))
         
         return {
             "workspace_name": workspace_name,
-            "tree": self._build_tree(workspace_path, workspace_path)
+            "tree": self._build_tree(workspace_path, workspace_path, show_all=show_all)
         }
 
-    def _build_tree(self, path: Path, root_path: Path) -> Dict:
-        """Build a tree structure recursively"""
+    def _should_exclude_from_tree(self, path: Path) -> bool:
+        """
+        Check if a file or directory should be excluded from the file tree.
+        Excludes compiler-generated files, build artifacts, and IDE-specific files.
+        """
+        name = path.name
+        
+        # Directory exclusions
+        if path.is_dir():
+            # SBT/Scala build directories
+            if name in {'target', '.bsp', '.bloop', '.metals', '.ammonite'}:
+                return True
+            # IDE directories
+            if name in {'.idea', '.vscode', '.eclipse', '.settings'}:
+                return True
+            # Version control (optional - you might want to show .git)
+            if name in {'.git', '.svn', '.hg'}:
+                return True
+            # OS-specific directories
+            if name in {'.DS_Store', '__pycache__', '.pytest_cache'}:
+                return True
+            # Nested project directories that are usually generated
+            if name == 'project' and (path.parent / 'project' / 'target').exists():
+                # Check if this project directory has a target subdirectory (generated)
+                if (path / 'target').exists():
+                    return True
+        
+        # File exclusions
+        else:
+            # Compiled files
+            if name.endswith(('.class', '.jar', '.tasty')):
+                return True
+            # Log files
+            if name.endswith(('.log', '.out')):
+                return True
+            # Temporary files
+            if name.endswith(('.tmp', '.temp', '.swp', '.swo', '~')):
+                return True
+            # OS-specific files
+            if name in {'.DS_Store', 'Thumbs.db', 'desktop.ini'}:
+                return True
+            # IDE-specific files
+            if name.endswith(('.iml', '.ipr', '.iws')):
+                return True
+            # Backup files
+            if name.startswith('.#') or name.endswith('#'):
+                return True
+        
+        return False
+
+    def _build_tree(self, path: Path, root_path: Path, show_all: bool = False) -> Dict:
+        """Build a tree structure recursively, optionally excluding compiler-generated files
+        
+        Args:
+            path: Current path being processed
+            root_path: Root path of the workspace
+            show_all: If False, filters out compiler-generated files and build artifacts.
+                     If True, shows all files.
+        """
         relative_path = path.relative_to(root_path) if path != root_path else Path(".")
         
         result = {
@@ -158,7 +221,9 @@ lazy val root = (project in file("."))
             children = []
             try:
                 for child in sorted(path.iterdir()):
-                    children.append(self._build_tree(child, root_path))
+                    # Skip excluded files and directories only if show_all is False
+                    if show_all or not self._should_exclude_from_tree(child):
+                        children.append(self._build_tree(child, root_path, show_all=show_all))
                 result["children"] = children
             except PermissionError:
                 result["error"] = "Permission denied"
