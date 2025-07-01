@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from dotenv import load_dotenv
 from typing import List, Optional, Dict, Any
+from contextlib import asynccontextmanager
 # slowapi imports
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -48,28 +49,30 @@ workspace_manager = WorkspaceManager(base_dir=BASE_DIR)
 sbt_runner = SBTRunner()
 bash_session_manager = BashSessionManager(workspace_manager)
 
-app = FastAPI(
-    title="Scala SBT Workspace API",
-    description="Manage SBT workspaces and run SBT commands via Docker",
-    version="0.2.0",
-)
-
-@app.on_event("startup")
-async def startup_event():
-    """Start background services when the application starts"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle application startup and shutdown events"""
+    # Startup
     if bash_session_manager.auto_cleanup_enabled:
         result = await bash_session_manager.start_auto_cleanup()
         logger.info(f"Application startup: Auto-cleanup task {result.get('status', 'unknown')}")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up background services when the application shuts down"""
+    
+    yield
+    
+    # Shutdown
     result = await bash_session_manager.stop_auto_cleanup()
     logger.info(f"Application shutdown: Auto-cleanup task {result.get('status', 'unknown')}")
     
     # Close any remaining sessions
     cleanup_result = await bash_session_manager.cleanup_inactive_sessions()
     logger.info(f"Application shutdown: Cleaned up {cleanup_result.get('cleaned_sessions', 0)} sessions")
+
+app = FastAPI(
+    title="Scala SBT Workspace API",
+    description="Manage SBT workspaces and run SBT commands via Docker",
+    version="0.2.0",
+    lifespan=lifespan,
+)
 # register the exception handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
