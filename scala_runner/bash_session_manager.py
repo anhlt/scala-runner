@@ -341,13 +341,22 @@ fi
 class BashSessionManager:
     """Manages multiple bash sessions across workspaces"""
     
-    def __init__(self, workspace_manager, docker_image: str = "sbtscala/scala-sbt:eclipse-temurin-alpine-21.0.7_6_1.11.2_3.7.1"):
+    def __init__(self, 
+                 workspace_manager, 
+                 docker_image: str = "sbtscala/scala-sbt:eclipse-temurin-alpine-21.0.7_6_1.11.2_3.7.1",
+                 session_timeout: int = 3600,  # 1 hour default timeout
+                 cleanup_interval: int = 300,  # 5 minutes default cleanup interval
+                 auto_cleanup_enabled: bool = True):
         self.workspace_manager = workspace_manager
         self.docker_image = docker_image
         self.sessions: Dict[str, BashSession] = {}
         self.sessions_by_workspace: Dict[str, List[str]] = {}
         self.max_sessions_per_workspace = 5
-        self.session_timeout = 3600  # 1 hour default timeout
+        self.session_timeout = session_timeout
+        self.cleanup_interval = cleanup_interval
+        self.auto_cleanup_enabled = auto_cleanup_enabled
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._shutdown_event: Optional[asyncio.Event] = None
         
     async def create_session(self, workspace_name: str) -> Dict:
         """Create a new bash session for a workspace"""
@@ -465,17 +474,198 @@ class BashSessionManager:
         
         for session_id, session in list(self.sessions.items()):
             # Check if session is inactive or timed out
-            if (not session.is_active or 
-                (current_time - session.last_used) > self.session_timeout):
+            inactive_time = current_time - session.last_used
+            if (not session.is_active or inactive_time > self.session_timeout):
                 try:
+                    logger.info(f"Cleaning up inactive session {session_id} (inactive for {inactive_time:.1f}s)")
                     await self.close_session(session_id)
-                    cleaned_sessions.append(session_id)
+                    cleaned_sessions.append({
+                        "session_id": session_id,
+                        "workspace_name": session.workspace_name,
+                        "inactive_time": inactive_time,
+                        "reason": "inactive" if session.is_active else "not_active"
+                    })
                 except Exception as e:
                     logger.error(f"Error cleaning up session {session_id}: {e}")
         
+        if cleaned_sessions:
+            logger.info(f"Cleaned up {len(cleaned_sessions)} inactive sessions")
+        
         return {
             "cleaned_sessions": len(cleaned_sessions),
-            "session_ids": cleaned_sessions
+            "sessions": cleaned_sessions,
+            "cleanup_time": current_time,
+            "session_timeout": self.session_timeout
+        }
+
+    async def start_auto_cleanup(self) -> Dict:
+        """Start the automatic cleanup background task"""
+        if self._cleanup_task and not self._cleanup_task.done():
+            return {
+                "status": "already_running",
+                "message": "Auto-cleanup task is already running"
+            }
+        
+        if not self.auto_cleanup_enabled:
+            return {
+                "status": "disabled",
+                "message": "Auto-cleanup is disabled"
+            }
+        
+        # Create a new event for this session
+        self._shutdown_event = asyncio.Event()
+        self._cleanup_task = asyncio.create_task(self._auto_cleanup_task())
+        logger.info(f"Started auto-cleanup task (interval: {self.cleanup_interval}s, timeout: {self.session_timeout}s)")
+        
+        return {
+            "status": "started",
+            "cleanup_interval": self.cleanup_interval,
+            "session_timeout": self.session_timeout,
+            "message": "Auto-cleanup task started successfully"
+        }
+
+    async def stop_auto_cleanup(self) -> Dict:
+        """Stop the automatic cleanup background task"""
+        if not self._cleanup_task or self._cleanup_task.done():
+            return {
+                "status": "not_running",
+                "message": "Auto-cleanup task is not running"
+            }
+        
+        if self._shutdown_event:
+            self._shutdown_event.set()
+        
+        try:
+            # Wait for the task to finish gracefully
+            await asyncio.wait_for(self._cleanup_task, timeout=5)
+        except asyncio.TimeoutError:
+            # Force cancel the task if it doesn't finish within timeout
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+        
+        logger.info("Stopped auto-cleanup task")
+        
+        return {
+            "status": "stopped",
+            "message": "Auto-cleanup task stopped successfully"
+        }
+
+    async def _auto_cleanup_task(self) -> None:
+        """Background task that periodically cleans up inactive sessions"""
+        logger.info(f"Auto-cleanup task started (interval: {self.cleanup_interval}s)")
+        
+        # Ensure we have a shutdown event
+        if not self._shutdown_event:
+            self._shutdown_event = asyncio.Event()
+        
+        while not self._shutdown_event.is_set():
+            try:
+                # Wait for the cleanup interval or shutdown event
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(), 
+                    timeout=self.cleanup_interval
+                )
+                # If we reach here, shutdown was requested
+                break
+                
+            except asyncio.TimeoutError:
+                # Timeout occurred, time to run cleanup
+                try:
+                    if self.sessions:  # Only run cleanup if there are sessions
+                        logger.debug(f"Running auto-cleanup (current sessions: {len(self.sessions)})")
+                        result = await self.cleanup_inactive_sessions()
+                        
+                        if result["cleaned_sessions"] > 0:
+                            logger.info(f"Auto-cleanup completed: {result['cleaned_sessions']} sessions cleaned")
+                    
+                except Exception as e:
+                    logger.error(f"Error during auto-cleanup: {e}")
+                
+            except Exception as e:
+                logger.error(f"Unexpected error in auto-cleanup task: {e}")
+                break
+        
+        logger.info("Auto-cleanup task finished")
+
+    def configure_cleanup(self, 
+                         session_timeout: Optional[int] = None,
+                         cleanup_interval: Optional[int] = None,
+                         auto_cleanup_enabled: Optional[bool] = None) -> Dict:
+        """Configure cleanup settings"""
+        old_settings = {
+            "session_timeout": self.session_timeout,
+            "cleanup_interval": self.cleanup_interval,
+            "auto_cleanup_enabled": self.auto_cleanup_enabled
+        }
+        
+        if session_timeout is not None:
+            if session_timeout <= 0:
+                raise ValueError("Session timeout must be positive")
+            self.session_timeout = session_timeout
+        
+        if cleanup_interval is not None:
+            if cleanup_interval <= 0:
+                raise ValueError("Cleanup interval must be positive")
+            self.cleanup_interval = cleanup_interval
+        
+        if auto_cleanup_enabled is not None:
+            self.auto_cleanup_enabled = auto_cleanup_enabled
+        
+        new_settings = {
+            "session_timeout": self.session_timeout,
+            "cleanup_interval": self.cleanup_interval,
+            "auto_cleanup_enabled": self.auto_cleanup_enabled
+        }
+        
+        logger.info(f"Updated cleanup configuration: {new_settings}")
+        
+        return {
+            "status": "updated",
+            "old_settings": old_settings,
+            "new_settings": new_settings,
+            "message": "Cleanup configuration updated successfully"
+        }
+
+    def get_cleanup_stats(self) -> Dict:
+        """Get cleanup configuration and statistics"""
+        current_time = time.time()
+        active_sessions = sum(1 for session in self.sessions.values() if session.is_active)
+        inactive_sessions = len(self.sessions) - active_sessions
+        
+        # Calculate sessions that will be cleaned up soon
+        sessions_to_cleanup = []
+        for session_id, session in self.sessions.items():
+            inactive_time = current_time - session.last_used
+            if inactive_time > self.session_timeout or not session.is_active:
+                sessions_to_cleanup.append({
+                    "session_id": session_id,
+                    "workspace_name": session.workspace_name,
+                    "inactive_time": inactive_time,
+                    "will_cleanup": True
+                })
+        
+        return {
+            "configuration": {
+                "session_timeout": self.session_timeout,
+                "cleanup_interval": self.cleanup_interval,
+                "auto_cleanup_enabled": self.auto_cleanup_enabled,
+                "max_sessions_per_workspace": self.max_sessions_per_workspace
+            },
+            "statistics": {
+                "total_sessions": len(self.sessions),
+                "active_sessions": active_sessions,
+                "inactive_sessions": inactive_sessions,
+                "sessions_to_cleanup": len(sessions_to_cleanup),
+                "workspaces_with_sessions": len(self.sessions_by_workspace)
+            },
+            "auto_cleanup_task": {
+                "running": self._cleanup_task is not None and not self._cleanup_task.done(),
+                "task_status": "running" if (self._cleanup_task and not self._cleanup_task.done()) else "stopped"
+            },
+            "sessions_pending_cleanup": sessions_to_cleanup
         }
 
     def _is_safe_command(self, command: str) -> bool:
