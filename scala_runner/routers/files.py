@@ -106,6 +106,20 @@ async def patch_files(request: Request, payload: PatchFileRequest):
             payload.workspace_name,
             payload.patch
         )
+        
+        # Check if patch application failed due to syntax errors
+        if not result.get("patch_applied", True) and "error_code" in result:
+            # Return HTTP 400 for syntax errors with detailed error information
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error_code": result["error_code"],
+                    "error_message": result["error_message"],
+                    "data": result
+                }
+            )
+        
         return JSONResponse({"status": "success", "data": result})
     except ValueError as e:
         raise HTTPException(400, str(e))
