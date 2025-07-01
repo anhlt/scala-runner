@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-import os
+import platform
 from pathlib import Path
 from typing import Dict, List, Optional
 from .output_process import clean_subprocess_output
@@ -13,6 +13,22 @@ class SBTRunner:
     def __init__(self, docker_image: str = "sbtscala/scala-sbt:eclipse-temurin-alpine-21.0.7_6_1.11.2_3.7.1"):
         self.docker_image = docker_image
         self.timeout = 120  # 2 minutes default timeout
+
+    def _get_docker_platform_args(self):
+        """Get appropriate Docker platform arguments based on the host architecture"""
+        host_arch = platform.machine().lower()
+        
+        # Force linux/amd64 in CI or if explicitly requested
+        if os.getenv("CI") or os.getenv("GITHUB_ACTIONS") or os.getenv("FORCE_AMD64"):
+            return ["--platform", "linux/amd64"]
+        
+        # For ARM Macs, use ARM64 but fall back to amd64 if the image doesn't support it
+        if host_arch in ("arm64", "aarch64") and platform.system() == "Darwin":
+            # Try ARM64 first for better performance
+            return ["--platform", "linux/arm64"]
+        
+        # For other architectures, use amd64 as default
+        return ["--platform", "linux/amd64"]
 
     async def run_sbt_command(
         self, 
@@ -52,6 +68,9 @@ class SBTRunner:
             # Split compound commands like "clean compile" into separate arguments
             sbt_commands = command.split()
         
+        # Get platform arguments
+        platform_args = self._get_docker_platform_args()
+        
         docker_cmd = [
             "docker", "run", "--rm",
             f"-v{workspace_path}:/workspace",
@@ -59,14 +78,13 @@ class SBTRunner:
             f"-v/tmp/ivy-cache:/root/.ivy2",
             f"-v/tmp/coursier-cache:/root/.cache/coursier",
             "-w", "/workspace",
+            # Add JVM options for stability and ARM compatibility
+            "-e", "JAVA_OPTS=-Xmx2g -Xms512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseContainerSupport",
+            "-e", "SBT_OPTS=-Xmx2g -Xms512m -XX:+UseG1GC",
+        ] + platform_args + [
             self.docker_image,
             "sbt"
         ] + sbt_commands
-        
-        # Add platform flag for CI environments (GitHub Actions runs on amd64)
-        if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
-            docker_cmd.insert(3, "--platform")
-            docker_cmd.insert(4, "linux/amd64")
         
         logger.info(f"Running SBT command: {' '.join(docker_cmd)}")
         

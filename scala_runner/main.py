@@ -16,6 +16,7 @@ from slowapi.errors import RateLimitExceeded
 import logging
 from .workspace_manager import WorkspaceManager
 from .sbt_runner import SBTRunner
+from .bash_session_manager import BashSessionManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ limiter = Limiter(
 # Initialize managers
 workspace_manager = WorkspaceManager(base_dir=BASE_DIR)
 sbt_runner = SBTRunner()
+bash_session_manager = BashSessionManager(workspace_manager)
 
 app = FastAPI(
     title="Scala SBT Workspace API",
@@ -163,6 +165,44 @@ class GitPushPullRequest(BaseModel):
     workspace_name: str
     remote_name: Optional[str] = "origin"
     branch_name: Optional[str] = None
+
+
+class CreateBashSessionRequest(BaseModel):
+    workspace_name: str
+
+    @field_validator("workspace_name")
+    def validate_workspace_name(cls, v: str) -> str:
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Workspace name cannot be empty")
+        return v.strip()
+
+
+class ExecuteBashCommandRequest(BaseModel):
+    session_id: str
+    command: str
+    timeout: Optional[int] = 30
+
+    @field_validator("session_id")
+    def validate_session_id(cls, v: str) -> str:
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Session ID cannot be empty")
+        return v.strip()
+
+    @field_validator("command")
+    def validate_command(cls, v: str) -> str:
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Command cannot be empty")
+        return v.strip()
+
+
+class CloseBashSessionRequest(BaseModel):
+    session_id: str
+
+    @field_validator("session_id") 
+    def validate_session_id(cls, v: str) -> str:
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Session ID cannot be empty")
+        return v.strip()
 
 
 # Workspace Management Endpoints
@@ -582,6 +622,103 @@ async def get_project_info(request: Request, workspace_name: str):
         return JSONResponse({"status": "success", "data": result})
     except Exception as e:
         logger.error(f"Error getting project info: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+# Bash Session Endpoints
+@app.post("/bash/sessions", summary="Create a new bash session")
+@limiter.limit(RATE_LIMIT)
+async def create_bash_session(request: Request, payload: CreateBashSessionRequest):
+    """Create a new bash session for a workspace"""
+    try:
+        result = await bash_session_manager.create_session(payload.workspace_name)
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Error creating bash session: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.post("/bash/execute", summary="Execute command in bash session")
+@limiter.limit(RATE_LIMIT)
+async def execute_bash_command(request: Request, payload: ExecuteBashCommandRequest):
+    """Execute a command in an existing bash session"""
+    try:
+        result = await bash_session_manager.execute_command(
+            payload.session_id, 
+            payload.command, 
+            payload.timeout
+        )
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Error executing bash command: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.delete("/bash/sessions/{session_id}", summary="Close a bash session")
+@limiter.limit(RATE_LIMIT)
+async def close_bash_session(request: Request, session_id: str):
+    """Close a specific bash session"""
+    try:
+        result = await bash_session_manager.close_session(session_id)
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"Error closing bash session: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.delete("/bash/workspaces/{workspace_name}/sessions", summary="Close all bash sessions for workspace")
+@limiter.limit(RATE_LIMIT)
+async def close_workspace_bash_sessions(request: Request, workspace_name: str):
+    """Close all bash sessions for a workspace"""
+    try:
+        result = await bash_session_manager.close_workspace_sessions(workspace_name)
+        return JSONResponse({"status": "success", "data": result})
+    except Exception as e:
+        logger.error(f"Error closing workspace bash sessions: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.get("/bash/sessions", summary="List all bash sessions")
+@limiter.limit(RATE_LIMIT)
+async def list_bash_sessions(request: Request, workspace_name: Optional[str] = None):
+    """List all bash sessions or sessions for a specific workspace"""
+    try:
+        result = bash_session_manager.list_sessions(workspace_name)
+        return JSONResponse({"status": "success", "data": result})
+    except Exception as e:
+        logger.error(f"Error listing bash sessions: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.get("/bash/sessions/{session_id}", summary="Get bash session info")
+@limiter.limit(RATE_LIMIT)
+async def get_bash_session_info(request: Request, session_id: str):
+    """Get detailed information about a specific bash session"""
+    try:
+        result = bash_session_manager.get_session_info(session_id)
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"Error getting bash session info: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.post("/bash/cleanup", summary="Clean up inactive bash sessions")
+@limiter.limit(RATE_LIMIT)
+async def cleanup_bash_sessions(request: Request):
+    """Clean up inactive or timed-out bash sessions"""
+    try:
+        result = await bash_session_manager.cleanup_inactive_sessions()
+        return JSONResponse({"status": "success", "data": result})
+    except Exception as e:
+        logger.error(f"Error cleaning up bash sessions: {e}")
         raise HTTPException(500, f"Internal server error: {str(e)}")
 
 
