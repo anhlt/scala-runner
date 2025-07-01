@@ -719,4 +719,370 @@ class TestSearchOperations:
             result = await workspace_manager.get_workspace_git_info(workspace_name)
         
         assert result["is_git_repo"] is False
-        assert "error" in result 
+        assert "error" in result
+
+
+class TestPatchOperations:
+    """Test git diff patch functionality"""
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_simple_line_change(self, workspace_manager):
+        """Test applying a simple line change patch"""
+        workspace_name = "test-workspace"
+        await workspace_manager.create_workspace(workspace_name)
+        
+        # Create initial file
+        file_path = "src/main/scala/Test.scala"
+        initial_content = """object Test {
+  def main(args: Array[String]): Unit = {
+    println("Hello, World!")
+  }
+}"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            await workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Create patch that changes "Hello, World!" to "Hello, Patched!"
+        patch_content = """--- a/src/main/scala/Test.scala
++++ b/src/main/scala/Test.scala
+@@ -1,5 +1,5 @@
+ object Test {
+   def main(args: Array[String]): Unit = {
+-    println("Hello, World!")
++    println("Hello, Patched!")
+   }
+ }"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            result = await workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        assert result["results"]["total_files"] == 1
+        assert result["results"]["successful_files"] == 1
+        assert len(result["results"]["modified_files"]) == 1
+        
+        modified_file = result["results"]["modified_files"][0]
+        assert modified_file["file_path"] == file_path
+        assert modified_file["status"] == "success"
+        assert modified_file["hunks_applied"] == 1
+        
+        # Verify file content was actually changed
+        full_path = workspace_manager.get_workspace_path(workspace_name) / file_path
+        new_content = full_path.read_text()
+        assert "Hello, Patched!" in new_content
+        assert "Hello, World!" not in new_content
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_add_new_lines(self, workspace_manager):
+        """Test applying a patch that adds new lines"""
+        workspace_name = "test-workspace"
+        await workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "src/main/scala/Test.scala"
+        initial_content = """object Test {
+  def main(args: Array[String]): Unit = {
+    println("Hello")
+  }
+}"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            await workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Patch that adds new lines
+        patch_content = """--- a/src/main/scala/Test.scala
++++ b/src/main/scala/Test.scala
+@@ -1,5 +1,7 @@
+ object Test {
+   def main(args: Array[String]): Unit = {
+     println("Hello")
++    val x = 42
++    println(s"Number: $x")
+   }
+ }"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            result = await workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        
+        # Verify new lines were added
+        full_path = workspace_manager.get_workspace_path(workspace_name) / file_path
+        new_content = full_path.read_text()
+        assert "val x = 42" in new_content
+        assert "println(s\"Number: $x\")" in new_content
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_remove_lines(self, workspace_manager):
+        """Test applying a patch that removes lines"""
+        workspace_name = "test-workspace"
+        await workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "src/main/scala/Test.scala"
+        initial_content = """object Test {
+  def main(args: Array[String]): Unit = {
+    println("Hello")
+    val x = 42
+    println(s"Number: $x")
+    println("Goodbye")
+  }
+}"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            await workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Patch that removes lines
+        patch_content = """--- a/src/main/scala/Test.scala
++++ b/src/main/scala/Test.scala
+@@ -1,8 +1,6 @@
+ object Test {
+   def main(args: Array[String]): Unit = {
+     println("Hello")
+-    val x = 42
+-    println(s"Number: $x")
+     println("Goodbye")
+   }
+ }"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            result = await workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        
+        # Verify lines were removed
+        full_path = workspace_manager.get_workspace_path(workspace_name) / file_path
+        new_content = full_path.read_text()
+        assert "val x = 42" not in new_content
+        assert "println(s\"Number: $x\")" not in new_content
+        assert "println(\"Hello\")" in new_content
+        assert "println(\"Goodbye\")" in new_content
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_create_new_file(self, workspace_manager):
+        """Test applying a patch that creates a new file"""
+        workspace_name = "test-workspace"
+        await workspace_manager.create_workspace(workspace_name)
+        
+        # Patch that creates a new file
+        patch_content = """--- /dev/null
++++ b/src/main/scala/NewFile.scala
+@@ -0,0 +1,5 @@
++object NewFile {
++  def greet(): String = {
++    "Hello from new file!"
++  }
++}"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            result = await workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        assert result["results"]["total_files"] == 1
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify new file was created
+        new_file_path = workspace_manager.get_workspace_path(workspace_name) / "src/main/scala/NewFile.scala"
+        assert new_file_path.exists()
+        content = new_file_path.read_text()
+        assert "object NewFile" in content
+        assert "Hello from new file!" in content
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_multiple_files(self, workspace_manager):
+        """Test applying a patch that modifies multiple files"""
+        workspace_name = "test-workspace"
+        await workspace_manager.create_workspace(workspace_name)
+        
+        # Create initial files
+        file1_path = "src/main/scala/File1.scala"
+        file1_content = "object File1 { val value = \"old\" }"
+        
+        file2_path = "src/main/scala/File2.scala"
+        file2_content = "object File2 { def method() = {} }"
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            await workspace_manager.create_file(workspace_name, file1_path, file1_content)
+            await workspace_manager.create_file(workspace_name, file2_path, file2_content)
+        
+        # Patch that modifies both files
+        patch_content = """--- a/src/main/scala/File1.scala
++++ b/src/main/scala/File1.scala
+@@ -1 +1 @@
+-object File1 { val value = "old" }
++object File1 { val value = "new" }
+--- a/src/main/scala/File2.scala
++++ b/src/main/scala/File2.scala
+@@ -1 +1,3 @@
+-object File2 { def method() = {} }
++object File2 { 
++  def method() = println("updated")
++}"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            result = await workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        assert result["results"]["total_files"] == 2
+        assert result["results"]["successful_files"] == 2
+        
+        # Verify both files were modified
+        full_path1 = workspace_manager.get_workspace_path(workspace_name) / file1_path
+        full_path2 = workspace_manager.get_workspace_path(workspace_name) / file2_path
+        
+        content1 = full_path1.read_text()
+        content2 = full_path2.read_text()
+        
+        assert 'val value = "new"' in content1
+        assert 'val value = "old"' not in content1
+        assert 'println("updated")' in content2
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_multiple_hunks_same_file(self, workspace_manager):
+        """Test applying a patch with multiple hunks in the same file"""
+        workspace_name = "test-workspace"
+        await workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "src/main/scala/Test.scala"
+        initial_content = """object Test {
+  val x = 1
+  val y = 2
+  
+  def method1() = {
+    println("method1")
+  }
+  
+  def method2() = {
+    println("method2")
+  }
+}"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            await workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Patch with multiple hunks
+        patch_content = """--- a/src/main/scala/Test.scala
++++ b/src/main/scala/Test.scala
+@@ -1,4 +1,4 @@
+ object Test {
+-  val x = 1
++  val x = 10
+   val y = 2
+   
+@@ -8,5 +8,5 @@
+   }
+   
+   def method2() = {
+-    println("method2")
++    println("updated method2")
+   }
+ }"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            result = await workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        modified_file = result["results"]["modified_files"][0]
+        assert modified_file["hunks_applied"] == 2
+        
+        # Verify both hunks were applied
+        full_path = workspace_manager.get_workspace_path(workspace_name) / file_path
+        new_content = full_path.read_text()
+        assert "val x = 10" in new_content
+        assert "updated method2" in new_content
+        # Note: Multiple hunk application may have issues with overlapping content
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_invalid_workspace(self, workspace_manager):
+        """Test applying patch to non-existent workspace"""
+        patch_content = """--- a/test.scala
++++ b/test.scala
+@@ -1 +1 @@
+-old line
++new line"""
+        
+        with pytest.raises(ValueError, match="Workspace 'nonexistent' not found"):
+            await workspace_manager.apply_patch("nonexistent", patch_content)
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_empty_patch(self, workspace_manager):
+        """Test applying empty patch"""
+        workspace_name = "test-workspace"
+        await workspace_manager.create_workspace(workspace_name)
+        
+        patch_content = ""
+        
+        result = await workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        # Should succeed but with no changes
+        assert result["patch_applied"] is True
+        assert result["results"]["total_files"] == 0
+        assert result["results"]["successful_files"] == 0
+
+    @pytest.mark.asyncio
+    async def test_parse_hunk_header_valid(self, workspace_manager):
+        """Test parsing valid hunk headers"""
+        # Test different hunk header formats
+        test_cases = [
+            ("@@ -1,4 +1,6 @@", {"old_start": 1, "old_count": 4, "new_start": 1, "new_count": 6}),
+            ("@@ -10 +10,2 @@", {"old_start": 10, "old_count": 1, "new_start": 10, "new_count": 2}),
+            ("@@ -5,0 +5,3 @@", {"old_start": 5, "old_count": 0, "new_start": 5, "new_count": 3}),
+        ]
+        
+        for header, expected in test_cases:
+            result = workspace_manager._parse_hunk_header(header)
+            assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_parse_hunk_header_invalid(self, workspace_manager):
+        """Test parsing invalid hunk headers"""
+        invalid_headers = [
+            "invalid header",
+            "@@ invalid @@",
+            "not a hunk header",
+            "",
+        ]
+        
+        for header in invalid_headers:
+            result = workspace_manager._parse_hunk_header(header)
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_context_lines(self, workspace_manager):
+        """Test applying patch with context lines"""
+        workspace_name = "test-workspace"
+        await workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "src/main/scala/Test.scala"
+        initial_content = """line1
+line2
+old_line
+line4
+line5"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            await workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Patch with context lines
+        patch_content = """--- a/src/main/scala/Test.scala
++++ b/src/main/scala/Test.scala
+@@ -1,5 +1,5 @@
+ line1
+ line2
+-old_line
++new_line
+ line4
+ line5"""
+        
+        with patch.object(workspace_manager, '_index_file', new_callable=AsyncMock):
+            result = await workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        
+        # Verify only the target line was changed
+        full_path = workspace_manager.get_workspace_path(workspace_name) / file_path
+        new_content = full_path.read_text()
+        lines = new_content.split('\n')
+        assert lines[0] == "line1"
+        assert lines[1] == "line2"
+        assert lines[2] == "new_line"
+        assert lines[3] == "line4"
+        assert lines[4] == "line5" 

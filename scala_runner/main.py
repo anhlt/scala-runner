@@ -97,6 +97,17 @@ class UpdateFileRequest(BaseModel):
     content: str
 
 
+class PatchFileRequest(BaseModel):
+    workspace_name: str
+    patch: str
+    
+    @field_validator("patch")
+    def validate_patch(cls, v: str) -> str:
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Patch content cannot be empty")
+        return v.strip()
+
+
 class SBTCommandRequest(BaseModel):
     workspace_name: str
     command: str
@@ -394,6 +405,23 @@ async def update_file(request: Request, payload: UpdateFileRequest):
         raise HTTPException(404, str(e))
     except Exception as e:
         logger.error(f"Error updating file: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@app.patch("/files", summary="Apply git diff patch to files")
+@limiter.limit(RATE_LIMIT)
+async def patch_files(request: Request, payload: PatchFileRequest):
+    """Apply git diff patch to workspace files"""
+    try:
+        result = await workspace_manager.apply_patch(
+            payload.workspace_name,
+            payload.patch
+        )
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Error applying patch: {e}")
         raise HTTPException(500, f"Internal server error: {str(e)}")
 
 
