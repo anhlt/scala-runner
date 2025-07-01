@@ -13,6 +13,7 @@ import logging
 import git
 from urllib.parse import urlparse
 import re
+import difflib
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,187 @@ lazy val root = (project in file("."))
             "size": len(content),
             "extension": full_file_path.suffix.lstrip('.')
         }
+
+    async def apply_patch(self, workspace_name: str, patch_content: str) -> Dict:
+        """Apply a git diff patch to workspace files"""
+        workspace_path = self.workspaces_dir / workspace_name
+        
+        if not workspace_path.exists():
+            raise ValueError(f"Workspace '{workspace_name}' not found")
+        
+        # Parse the unified diff
+        try:
+            patch_results = await self._parse_and_apply_unified_diff(workspace_path, patch_content)
+            
+            # Re-index all modified files
+            for file_info in patch_results["modified_files"]:
+                if file_info["status"] == "success":
+                    file_path = file_info["file_path"]
+                    try:
+                        async with aiofiles.open(workspace_path / file_path, "r") as f:
+                            content = await f.read()
+                        await self._index_file(workspace_name, file_path, content)
+                    except Exception as e:
+                        logger.warning(f"Failed to re-index {file_path}: {e}")
+            
+            logger.info(f"Applied patch to workspace: {workspace_name}")
+            return {
+                "workspace_name": workspace_name,
+                "patch_applied": True,
+                "results": patch_results
+            }
+            
+        except Exception as e:
+            logger.error(f"Error applying patch: {e}")
+            raise ValueError(f"Failed to apply patch: {str(e)}")
+
+    async def _parse_and_apply_unified_diff(self, workspace_path: Path, patch_content: str) -> Dict:
+        """Parse and apply a unified diff patch"""
+        lines = patch_content.strip().split('\n')
+        current_file = None
+        hunks = []
+        modified_files = []
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            # Parse file headers
+            if line.startswith('--- '):
+                # Extract old file path
+                old_file = line[4:].strip()
+                if old_file.startswith('a/'):
+                    old_file = old_file[2:]
+                elif old_file == '/dev/null':
+                    old_file = None
+            elif line.startswith('+++ '):
+                # Extract new file path
+                new_file = line[4:].strip()
+                if new_file.startswith('b/'):
+                    new_file = new_file[2:]
+                elif new_file == '/dev/null':
+                    new_file = None
+                
+                current_file = new_file or old_file
+                if current_file:
+                    hunks = []
+            elif line.startswith('@@'):
+                # Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
+                hunk_info = self._parse_hunk_header(line)
+                if hunk_info and current_file:
+                    # Collect hunk lines
+                    i += 1
+                    hunk_lines = []
+                    while i < len(lines) and not lines[i].startswith('@@') and not lines[i].startswith('---'):
+                        hunk_lines.append(lines[i])
+                        i += 1
+                    i -= 1  # Back up one since the outer loop will increment
+                    
+                    # Apply this hunk
+                    try:
+                        result = await self._apply_hunk(workspace_path, current_file, hunk_info, hunk_lines)
+                        
+                        # Track this file if not already tracked
+                        if not any(f["file_path"] == current_file for f in modified_files):
+                            modified_files.append({
+                                "file_path": current_file,
+                                "status": "success" if result else "failed",
+                                "hunks_applied": 1 if result else 0
+                            })
+                        else:
+                            # Update existing entry
+                            for f in modified_files:
+                                if f["file_path"] == current_file:
+                                    if result:
+                                        f["hunks_applied"] += 1
+                                    else:
+                                        f["status"] = "failed"
+                                    break
+                    except Exception as e:
+                        logger.error(f"Error applying hunk to {current_file}: {e}")
+                        # Track failed file
+                        if not any(f["file_path"] == current_file for f in modified_files):
+                            modified_files.append({
+                                "file_path": current_file,
+                                "status": "failed",
+                                "error": str(e),
+                                "hunks_applied": 0
+                            })
+            
+            i += 1
+        
+        return {
+            "modified_files": modified_files,
+            "total_files": len(modified_files),
+            "successful_files": len([f for f in modified_files if f["status"] == "success"])
+        }
+
+    def _parse_hunk_header(self, header_line: str) -> Optional[Dict]:
+        """Parse a unified diff hunk header like @@ -1,4 +1,6 @@"""
+        import re
+        match = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', header_line)
+        if match:
+            old_start = int(match.group(1))
+            old_count = int(match.group(2)) if match.group(2) else 1
+            new_start = int(match.group(3))
+            new_count = int(match.group(4)) if match.group(4) else 1
+            
+            return {
+                "old_start": old_start,
+                "old_count": old_count,
+                "new_start": new_start,
+                "new_count": new_count
+            }
+        return None
+
+    async def _apply_hunk(self, workspace_path: Path, file_path: str, hunk_info: Dict, hunk_lines: List[str]) -> bool:
+        """Apply a single hunk to a file"""
+        full_file_path = workspace_path / file_path
+        
+        # Read existing file or create new one
+        if full_file_path.exists():
+            async with aiofiles.open(full_file_path, "r") as f:
+                original_lines = (await f.read()).split('\n')
+        else:
+            # Create parent directories if needed
+            full_file_path.parent.mkdir(parents=True, exist_ok=True)
+            original_lines = []
+        
+        # Apply the hunk
+        old_start = hunk_info["old_start"] - 1  # Convert to 0-based indexing
+        old_count = hunk_info["old_count"]
+        
+        # Process hunk lines to create the replacement content
+        new_hunk_lines = []
+        
+        for line in hunk_lines:
+            if not line:
+                continue
+                
+            prefix = line[0] if line else ' '
+            content = line[1:] if len(line) > 1 else ''
+            
+            if prefix == ' ':  # Context line - keep it
+                new_hunk_lines.append(content)
+            elif prefix == '+':  # Addition - add it
+                new_hunk_lines.append(content)
+            elif prefix == '-':  # Deletion - skip it (don't add to new_hunk_lines)
+                pass
+            # Ignore other prefixes like '\ No newline at end of file'
+        
+        # Reconstruct the file by replacing the old section with the new hunk content
+        result_lines = (
+            original_lines[:old_start] +  # Lines before the hunk
+            new_hunk_lines +  # Modified hunk content
+            original_lines[old_start + old_count:]  # Lines after the hunk
+        )
+        
+        # Write the modified file
+        new_content = '\n'.join(result_lines)
+        async with aiofiles.open(full_file_path, "w") as f:
+            await f.write(new_content)
+        
+        return True
 
     async def search_files(self, workspace_name: str, query: str, limit: int = 10) -> List[Dict]:
         """Search for files containing the query"""
