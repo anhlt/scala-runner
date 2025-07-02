@@ -43,6 +43,12 @@ class SearchRequest(BaseModel):
     query: str
     limit: Optional[int] = 10
 
+class FuzzySearchRequest(BaseModel):
+    workspace_name: str  # Can be "all" to search across all workspaces
+    query: str
+    limit: Optional[int] = 10
+    fuzzy: Optional[bool] = True
+
 
 # Search Endpoints
 @router.post("", summary="Search files by content")
@@ -66,4 +72,29 @@ async def search_files(request: Request, payload: SearchRequest):
         })
     except Exception as e:
         logger.error(f"Error searching files: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+@router.post("/fuzzy", summary="Fuzzy search files by content")
+@limiter.limit(RATE_LIMIT)
+async def fuzzy_search_files(request: Request, payload: FuzzySearchRequest):
+    """Search for files with fuzzy matching support"""
+    try:
+        results = await workspace_manager.search_files_fuzzy(
+            payload.workspace_name,
+            payload.query,
+            payload.limit or 10,
+            payload.fuzzy if payload.fuzzy is not None else True
+        )
+        return JSONResponse({
+            "status": "success", 
+            "data": {
+                "query": payload.query,
+                "workspace": payload.workspace_name,
+                "fuzzy_enabled": payload.fuzzy if payload.fuzzy is not None else True,
+                "results": results,
+                "count": len(results)
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error in fuzzy search: {e}")
         raise HTTPException(500, f"Internal server error: {str(e)}") 

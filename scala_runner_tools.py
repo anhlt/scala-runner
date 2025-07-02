@@ -489,7 +489,7 @@ class Tools:
         try:
             async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
                 resp = await client.get(
-                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/files/{workspace_name}/{file_path}/lines",
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/files/{workspace_name}/_lines/{file_path}",
                     params={"start_line": start_line, "end_line": end_line},
                     headers=_build_headers(),
                 )
@@ -584,7 +584,54 @@ class Tools:
         patch: str,
         __event_emitter__: Optional[Callable[[Dict], None]] = None,
     ) -> Union[Dict, Dict[str, str]]:
-        """Apply git diff patch to workspace files"""
+        """Apply SEARCH/REPLACE format patch to workspace files
+        
+        Uses SEARCH/REPLACE syntax where each file modification starts with the file path,
+        followed by SEARCH block (exact content to find) and REPLACE block (new content).
+        
+        Format:
+        path/to/file.scala
+        <<<<<<< SEARCH
+        exact_existing_content
+        =======
+        new_replacement_content
+        >>>>>>> REPLACE
+        
+        Key Rules:
+        - File path must be on its own line
+        - SEARCH content must match exactly (including whitespace/indentation)
+        - Use exactly these markers: <<<<<<< SEARCH, =======, >>>>>>> REPLACE
+        - For new files, use empty SEARCH block
+        
+        Example - Adding a method:
+        src/main/scala/Calculator.scala
+        <<<<<<< SEARCH
+        def multiply(a: Int, b: Int): Int = a * b
+        }
+        =======
+        def multiply(a: Int, b: Int): Int = a * b
+        
+        def divide(a: Int, b: Int): Double = {
+          require(b != 0, "Division by zero")
+          a.toDouble / b.toDouble
+        }
+        }
+        >>>>>>> REPLACE
+        
+        Example - Creating new file:
+        src/main/scala/Utils.scala
+        <<<<<<< SEARCH
+        =======
+        object Utils {
+          def formatMessage(msg: String): String = {
+            val timestamp = java.time.LocalDateTime.now()
+            s"[$timestamp] $msg"
+          }
+        }
+        >>>>>>> REPLACE
+        
+        Multiple files can be modified in a single patch by repeating the pattern.
+        """
         await _emit(__event_emitter__, f"Applying patch to '{workspace_name}'…")
         try:
             async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
@@ -611,6 +658,45 @@ class Tools:
             return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to apply patch: {e}", done=True)
+            return {"error": str(e)}
+
+    async def search_files_fuzzy(
+        self,
+        workspace_name: str,
+        query: str,
+        limit: int = 10,
+        fuzzy: bool = True,
+        __event_emitter__: Optional[Callable[[Dict], None]] = None,
+    ) -> Union[Dict, Dict[str, str]]:
+        """Search files with fuzzy matching support"""
+        await _emit(__event_emitter__, f"Fuzzy searching in '{workspace_name}'…")
+        try:
+            async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
+                resp = await client.post(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/search/fuzzy",
+                    json={
+                        "workspace_name": workspace_name,
+                        "query": query,
+                        "limit": limit,
+                        "fuzzy": fuzzy,
+                    },
+                    headers=_build_headers(),
+                )
+            resp.raise_for_status()
+            result = resp.json()
+            await _emit(__event_emitter__, f"Found {result.get('data', {}).get('count', 0)} results", done=True)
+            return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to search: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
+        except Exception as e:
+            await _emit(__event_emitter__, f"Failed to search: {e}", done=True)
             return {"error": str(e)}
 
     # SBT Operations
@@ -1077,4 +1163,118 @@ class Tools:
             return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to close bash session: {e}", done=True)
-            return {"error": str(e)} 
+            return {"error": str(e)}
+
+    async def force_reindex_workspace(self, workspace_name: str) -> Dict:
+        """
+        Force complete re-indexing of a workspace
+        
+        Args:
+            workspace_name: Name of the workspace to re-index
+            
+        Returns:
+            Dict with re-indexing results
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.put(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspace/{workspace_name}/reindex",
+                    timeout=60.0
+                )
+                if response.status_code == 200:
+                    return response.json().get("data", {})
+                else:
+                    return {"error": f"HTTP {response.status_code}: {response.text}"}
+        except Exception as e:
+            return {"error": f"Network error: {str(e)}"}
+
+    async def get_index_status(self, workspace_name: str) -> Dict:
+        """
+        Get indexing status for a workspace
+        
+        Args:
+            workspace_name: Name of the workspace
+            
+        Returns:
+            Dict with index status information
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspace/{workspace_name}/index/status",
+                    timeout=30.0
+                )
+                if response.status_code == 200:
+                    return response.json().get("data", {})
+                else:
+                    return {"error": f"HTTP {response.status_code}: {response.text}"}
+        except Exception as e:
+            return {"error": f"Network error: {str(e)}"}
+
+    async def sync_index_with_filesystem(self, workspace_name: str) -> Dict:
+        """
+        Synchronize index with filesystem changes (add missing, remove stale)
+        
+        Args:
+            workspace_name: Name of the workspace
+            
+        Returns:
+            Dict with synchronization results
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspace/{workspace_name}/index/sync",
+                    timeout=60.0
+                )
+                if response.status_code == 200:
+                    return response.json().get("data", {})
+                else:
+                    return {"error": f"HTTP {response.status_code}: {response.text}"}
+        except Exception as e:
+            return {"error": f"Network error: {str(e)}"}
+
+    async def wait_for_index_ready(self, workspace_name: str, timeout: int = 10) -> Dict:
+        """
+        Wait for index to be ready and up-to-date
+        
+        Args:
+            workspace_name: Name of the workspace
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            Dict with readiness status
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspace/{workspace_name}/index/wait-ready",
+                    params={"timeout": timeout},
+                    timeout=float(timeout + 5)  # Add buffer for network
+                )
+                if response.status_code == 200:
+                    return response.json().get("data", {})
+                else:
+                    return {"error": f"HTTP {response.status_code}: {response.text}"}
+        except Exception as e:
+            return {"error": f"Network error: {str(e)}"}
+
+    async def get_index_queue_status(self) -> Dict:
+        """
+        Get status of the indexing queue
+        
+        Returns:
+            Dict with queue status information
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspace/any/index/queue-status",
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    return response.json().get("data", {})
+                else:
+                    return {"error": f"HTTP {response.status_code}: {response.text}"}
+        except Exception as e:
+            return {"error": f"Network error: {str(e)}"} 

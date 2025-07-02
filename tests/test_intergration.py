@@ -247,8 +247,12 @@ object SearchableExample {
         }
     )
     assert resp.status_code == 200, resp.text
-    
-    # Search for content
+
+    # Wait for indexing to be ready before searching
+    resp = client.post(f"/workspaces/{workspace_name}/index/wait-ready", params={"timeout": 15})
+    assert resp.status_code == 200, f"Index wait-ready failed: {resp.text}"
+
+    # Search for content (should work immediately now)
     resp = client.post(
         "/search",
         json={
@@ -258,7 +262,9 @@ object SearchableExample {
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert len(body["data"]["results"]) > 0
+    
+    # Verify we found results
+    assert len(body["data"]["results"]) > 0, f"Search returned no results: {body}"
     assert "SearchableExample.scala" in body["data"]["results"][0]["file_path"]
     
     # Clean up
@@ -437,12 +443,13 @@ def test_intensive_patch_api_integration():
         
         # Step 2: Patch build.sbt for the Scala 3 project
         # This patch creates a new build.sbt with Scala 3
-        build_sbt_patch = """--- /dev/null
-+++ b/build.sbt
-@@ -0,0 +1,3 @@
-+name := "ParseProject"
-+version := "0.1.0"
-+scalaVersion := "3.6.4\""""
+        build_sbt_patch = """build.sbt
+<<<<<<< SEARCH
+=======
+name := "ParseProject"
+version := "0.1.0"
+scalaVersion := "3.6.4"
+>>>>>>> REPLACE"""
         
         resp = client.patch(
             "/files",
@@ -476,12 +483,13 @@ def test_intensive_patch_api_integration():
         assert resp.status_code == 200, f"Failed to create Main.scala: {resp.text}"
         
         # Test PATCH API functionality using README.md to avoid Scala syntax issues
-        readme_patch = """--- /dev/null
-+++ b/README.md
-@@ -0,0 +1,3 @@
-+# Test Project
-+
-+This project tests the patch API."""
+        readme_patch = """README.md
+<<<<<<< SEARCH
+=======
+# Test Project
+
+This project tests the patch API.
+>>>>>>> REPLACE"""
         
         resp = client.patch(
             "/files",
@@ -493,14 +501,18 @@ def test_intensive_patch_api_integration():
         assert resp.status_code == 200, f"Failed to create README.md via patch: {resp.text}"
         
         # Now patch README.md to add more content - this tests the core patch functionality
-        readme_update_patch = """--- a/README.md
-+++ b/README.md
-@@ -1,3 +1,5 @@
- # Test Project
+        readme_update_patch = """README.md
+<<<<<<< SEARCH
+# Test Project
 
- This project tests the patch API.
-+
-+✅ Patch API is working correctly!"""
+This project tests the patch API.
+=======
+# Test Project
+
+This project tests the patch API.
+
+✅ Patch API is working correctly!
+>>>>>>> REPLACE"""
         
         resp = client.patch(
             "/files",
@@ -663,6 +675,197 @@ def test_workspace_file_tree_filtering():
     print(f"Filtered names: {filtered_names}")
     print(f"All names: {all_names}")
     print(f"Filtered count: {len(all_names) - len(filtered_names)}")
+    
+    # Clean up
+    client.delete(f"/workspaces/{workspace_name}")
+
+@pytest.mark.integration
+def test_get_file_content_by_lines():
+    """Test get file content by line range functionality"""
+    workspace_name = f"test-lines-{int(time.time()*1000)}-{random.randint(1000, 9999)}"
+    
+    # Create workspace
+    resp = client.post(
+        "/workspaces",
+        json={"name": workspace_name}
+    )
+    assert resp.status_code == 200, resp.text
+    
+    # Create a test file with known content (20 lines)
+    test_content = """Line 1: First line of the file
+Line 2: Second line with some content
+Line 3: Third line for testing
+Line 4: Fourth line contains data
+Line 5: Fifth line in the middle
+Line 6: Sixth line with numbers 123
+Line 7: Seventh line has symbols @#$
+Line 8: Eighth line is here
+Line 9: Ninth line before ten
+Line 10: Tenth line milestone
+Line 11: Eleventh line continues
+Line 12: Twelfth line with more content
+Line 13: Thirteenth line lucky number
+Line 14: Fourteenth line keeps going
+Line 15: Fifteenth line three quarters
+Line 16: Sixteenth line almost done
+Line 17: Seventeenth line near end
+Line 18: Eighteenth line penultimate
+Line 19: Nineteenth line second to last
+Line 20: Twentieth line final line"""
+    
+    file_path = "test_lines.txt"
+    resp = client.put(
+        "/files",
+        json={
+            "workspace_name": workspace_name,
+            "file_path": file_path,
+            "content": test_content
+        }
+    )
+    assert resp.status_code == 200, resp.text
+    
+    # Test Case 1: Get lines 1-5 (beginning of file)
+    resp = client.get(f"/files/{workspace_name}/_lines/{file_path}?start_line=1&end_line=5")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "success"
+    data = body["data"]
+    assert data["workspace_name"] == workspace_name
+    assert data["file_path"] == file_path
+    assert data["start_line"] == 1
+    assert data["requested_end_line"] == 5
+    assert data["end_line"] == 5
+    assert data["lines_returned"] == 5
+    lines = data["content"].split('\n')
+    assert len(lines) == 5
+    assert "Line 1: First line" in lines[0]
+    assert "Line 5: Fifth line" in lines[4]
+    
+    # Test Case 2: Get lines 10-15 (middle of file)
+    resp = client.get(f"/files/{workspace_name}/_lines/{file_path}?start_line=10&end_line=15")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "success"
+    data = body["data"]
+    assert data["start_line"] == 10
+    assert data["end_line"] == 15
+    assert data["lines_returned"] == 6
+    lines = data["content"].split('\n')
+    assert len(lines) == 6
+    assert "Line 10: Tenth line" in lines[0]
+    assert "Line 15: Fifteenth line" in lines[5]
+    
+    # Test Case 3: Get lines 18-20 (end of file)
+    resp = client.get(f"/files/{workspace_name}/_lines/{file_path}?start_line=18&end_line=20")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "success"
+    data = body["data"]
+    assert data["start_line"] == 18
+    assert data["end_line"] == 20
+    assert data["lines_returned"] == 3
+    lines = data["content"].split('\n')
+    assert len(lines) == 3
+    assert "Line 18: Eighteenth line" in lines[0]
+    assert "Line 20: Twentieth line final" in lines[2]
+    
+    # Test Case 4: Get single line
+    resp = client.get(f"/files/{workspace_name}/_lines/{file_path}?start_line=7&end_line=7")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "success"
+    data = body["data"]
+    assert data["start_line"] == 7
+    assert data["end_line"] == 7
+    assert data["lines_returned"] == 1
+    lines = data["content"].split('\n')
+    assert len(lines) == 1
+    assert "Line 7: Seventh line has symbols" in lines[0]
+    
+    # Test Case 5: Request beyond file end (graceful handling)
+    resp = client.get(f"/files/{workspace_name}/_lines/{file_path}?start_line=15&end_line=30")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "success"
+    data = body["data"]
+    assert data["start_line"] == 15
+    assert data["requested_end_line"] == 30
+    assert data["end_line"] == 20  # Should stop at actual end of file
+    assert data["total_file_lines"] == 20
+    assert data["lines_returned"] == 6  # Lines 15-20
+    
+    # Test Case 6: Invalid range (start > end)
+    resp = client.get(f"/files/{workspace_name}/_lines/{file_path}?start_line=10&end_line=5")
+    assert resp.status_code == 400, resp.text
+    body = resp.json()
+    assert "end_line must be >= start_line" in body["detail"]
+    
+    # Test Case 7: Invalid start line (< 1)
+    resp = client.get(f"/files/{workspace_name}/_lines/{file_path}?start_line=0&end_line=5")
+    assert resp.status_code == 400, resp.text
+    body = resp.json()
+    assert "start_line must be >= 1" in body["detail"]
+    
+    # Test Case 8: Start line beyond file length
+    resp = client.get(f"/files/{workspace_name}/_lines/{file_path}?start_line=25&end_line=30")
+    assert resp.status_code == 400, resp.text
+    body = resp.json()
+    assert "start_line (25) exceeds file length (20)" in body["detail"]
+    
+    # Test Case 9: Non-existent file
+    resp = client.get(f"/files/{workspace_name}/_lines/nonexistent.txt?start_line=1&end_line=5")
+    assert resp.status_code == 400, resp.text  # get_file_content_by_lines raises ValueError for not found
+    body = resp.json()
+    assert "not found" in body["detail"].lower()
+    
+    # Test Case 10: Non-existent workspace
+    resp = client.get(f"/files/nonexistent-workspace/_lines/{file_path}?start_line=1&end_line=5")
+    assert resp.status_code == 400, resp.text  # get_file_content_by_lines raises ValueError for not found
+    body = resp.json()
+    assert "not found" in body["detail"].lower()
+    
+    # Test Case 11: Test with Scala file (realistic scenario)
+    scala_content = """package com.example
+
+object MyScalaApp {
+  def main(args: Array[String]): Unit = {
+    println("Hello, World!")
+    val numbers = List(1, 2, 3, 4, 5)
+    val doubled = numbers.map(_ * 2)
+    println(s"Doubled: $doubled")
+    
+    val result = processData("test input")
+    println(s"Result: $result")
+  }
+  
+  def processData(input: String): String = {
+    input.toUpperCase.reverse
+  }
+}"""
+    
+    scala_file = "src/main/scala/MyApp.scala"
+    resp = client.put(
+        "/files",
+        json={
+            "workspace_name": workspace_name,
+            "file_path": scala_file,
+            "content": scala_content
+        }
+    )
+    assert resp.status_code == 200, resp.text
+    
+    # Get specific function definition (lines 14-16)
+    resp = client.get(f"/files/{workspace_name}/_lines/{scala_file}?start_line=14&end_line=16")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "success"
+    data = body["data"]
+    assert data["lines_returned"] == 3
+    lines = data["content"].split('\n')
+    assert len(lines) == 3
+    assert "def processData" in lines[0]
+    assert "input.toUpperCase.reverse" in lines[1]
+    assert "}" in lines[2]
     
     # Clean up
     client.delete(f"/workspaces/{workspace_name}")
