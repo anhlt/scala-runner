@@ -58,71 +58,83 @@ Example:
 3. **Valid Line Prefixes Only**: ` ` (space), `+`, `-`, or `\` (special markers)
 4. **No Invalid Prefixes**: Do not use `*`, `!`, `#`, or any other characters
 
-### 🔍 SEARCH-FIRST PATCH WORKFLOW (CRITICAL FOR SUCCESS)
+### 🔍 MANDATORY PRE-PATCH WORKFLOW
 
-**⚠️ NEVER create patches blindly! Always search first to get exact context.**
+**⚠️ CRITICAL REQUIREMENT: Always use get_file_content_by_lines before creating patches**
 
-#### Step 1: Search for Target Code
-Before creating any patch, search for the exact code you want to modify:
+**🎯 SINGLE FILE, SINGLE LOCATION RULE:**
+- **ONLY modify ONE file in ONE location per patch**
+- **ALWAYS verify the result using get_file_content_by_lines after applying patches**
+- **NEVER combine multiple files or multiple locations in a single patch**
 
+Before applying any patch, you MUST:
+
+#### Step 1: Search for Target Code (Optional but Recommended)
 ```json
 {
   "function": "search_files",
   "params": {
     "workspace_name": "my-project",
-    "query": "def processData",
+    "query": "target_function_or_pattern",
     "limit": 10
   }
 }
 ```
 
-**Response Analysis:**
-```json
-{
-  "data": {
-    "results": [
-      {
-        "file": "src/main/scala/DataProcessor.scala",
-        "line": 5,
-        "content": "  def processData(input: String): String = {"
-      }
-    ]
-  }
-}
-```
-
-#### Step 2: Read the Exact File Content
-Get the complete context around your target:
+#### Step 2: Get File Content by Lines (MANDATORY)
+**You MUST use this function to get the exact content and line numbers before creating any patch:**
 
 ```json
 {
-  "function": "get_file_content",
+  "function": "get_file_content_by_lines",
   "params": {
     "workspace_name": "my-project",
-    "file_path": "src/main/scala/DataProcessor.scala"
+    "file_path": "src/main/scala/MyFile.scala",
+    "start_line": 1,
+    "end_line": 50
   }
 }
 ```
 
-**Response Analysis:**
-```json
-{
-  "content": "object DataProcessor {\n  val config = \"default\"\n  \n  def processData(input: String): String = {\n    input.toUpperCase\n  }\n  \n  def helper(): Unit = println(\"help\")\n}"
-}
-```
+**Why this is critical:**
+- Ensures you have the exact content that exists in the file
+- Provides accurate line numbers for hunk headers
+- Prevents patches from failing due to content mismatches
+- Allows you to see the precise context around your target changes
 
-#### Step 3: Create Accurate Patch with Exact Context
-Now use the **exact content** from the file to create your patch:
+#### Step 3: Create Patch with Exact Content (SINGLE CHANGE ONLY)
+Only after getting the exact file content, create your patch using the **exact text** from the file:
 
 ```json
 {
   "function": "apply_patch",
   "params": {
     "workspace_name": "my-project",
-    "patch": "--- a/src/main/scala/DataProcessor.scala\n+++ b/src/main/scala/DataProcessor.scala\n@@ -3,7 +3,10 @@\n   val config = \"default\"\n   \n   def processData(input: String): String = {\n-    input.toUpperCase\n+    if (input.isEmpty) throw new IllegalArgumentException(\"Empty input\")\n+    val cleaned = input.trim.toLowerCase\n+    val processed = cleaned.split(\" \").map(_.capitalize).mkString(\" \")\n+    processed\n   }\n   \n   def helper(): Unit = println(\"help\")"
+    "patch": "--- a/src/main/scala/MyFile.scala\n+++ b/src/main/scala/MyFile.scala\n@@ -5,8 +5,10 @@\n  exact_context_from_file\n  exact_line_to_modify\n+  new_line_to_add\n  exact_context_after"
   }
 }
 ```
+
+#### Step 4: Verify Changes (MANDATORY)
+**ALWAYS verify your patch was applied correctly:**
+
+```json
+{
+  "function": "get_file_content_by_lines",
+  "params": {
+    "workspace_name": "my-project",
+    "file_path": "src/main/scala/MyFile.scala",
+    "start_line": 1,
+    "end_line": 60
+  }
+}
+```
+
+**Check for:**
+- [ ] Your changes are present in the exact location expected
+- [ ] No unintended side effects or corrupted content
+- [ ] Line numbers and content structure are correct
+- [ ] The file compiles (run `sbt_compile` after verification)
 
 ### Apply Patch Operation
 **Function:** `apply_patch`
@@ -133,702 +145,169 @@ Now use the **exact content** from the file to create your patch:
 }
 ```
 
-### 📋 SEARCH-FIRST PATCH EXAMPLES
+### 🚨 PATCH CREATION BEST PRACTICES
 
-#### 1. Simple Line Modification (Search-First Approach)
+#### ✅ DO:
+1. **Always call `get_file_content_by_lines` first**
+2. **Modify ONLY ONE file in ONE location per patch**
+3. **Always verify result with `get_file_content_by_lines` after patch**
+4. Use exact content from the file response
+5. Include sufficient context (3-5 lines before and after changes)
+6. Make one atomic change per patch
+7. Verify line numbers match the file content
+8. Use proper git diff format
+9. **Compile after each verified patch** (`sbt_compile`)
 
-**Step 1: Search for target**
+#### ❌ DON'T:
+1. Create patches without first reading the file content
+2. **NEVER modify multiple files in one patch**
+3. **NEVER modify multiple locations in one file without verification**
+4. Guess at file content or line numbers
+5. Skip verification step after applying patches
+6. Mix multiple unrelated changes in one patch
+7. Use invalid line prefixes
+8. Omit required file headers
+9. Create patches with incorrect hunk mathematics
+
+### 🎯 RECOMMENDED WORKFLOW FOR FILE MODIFICATIONS
+
+#### 🚨 CRITICAL: One File, One Location, One Change At A Time
+
+**MANDATORY SINGLE FILE WORKFLOW:**
+1. **Search** (optional): Find the target code location
+2. **Read by lines** (mandatory): Get exact content around target area  
+3. **Create patch**: Use exact content to build the patch for **ONE file ONLY**
+4. **Apply patch**: Submit the patch
+5. **Verify with get_file_content_by_lines** (mandatory): Confirm changes applied correctly
+6. **Compile**: Run `sbt_compile` to ensure no syntax errors
+7. **Repeat** for next file (if needed)
+
+#### Multiple File Changes (Sequential Only):
+**NEVER modify multiple files in one patch. Instead:**
+1. Complete entire workflow for File 1:
+   - Read by lines → Patch → Verify → Compile
+2. Only then proceed to File 2:
+   - Read by lines → Patch → Verify → Compile  
+3. Continue sequentially for each file
+
+#### Error Handling:
+- If patch fails, read the error message and error code
+- Use `get_file_content_by_lines` to re-examine the current file state
+- Create a corrected patch with the actual current content
+- **Always verify** the corrected patch with `get_file_content_by_lines`
+
+### 🔍 VERIFICATION WORKFLOW - MANDATORY AFTER EACH PATCH
+
+**After every successful patch application, you MUST verify:**
+
+#### Step 1: Immediate Post-Patch Verification
 ```json
 {
-  "function": "search_files",
-  "params": {
-    "workspace_name": "my-project",
-    "query": "println(\"Hello, World!\")",
-    "limit": 5
-  }
-}
-```
-
-**Step 2: Read file for context**
-```json
-{
-  "function": "get_file_content",
-  "params": {
-    "workspace_name": "my-project",
-    "file_path": "src/main/scala/Main.scala"
-  }
-}
-```
-
-**Step 3: Create patch with exact context**
-```json
-{
-  "workspace_name": "my-project",
-  "patch": "--- a/src/main/scala/Main.scala\n+++ b/src/main/scala/Main.scala\n@@ -1,3 +1,3 @@\n object Main {\n-  println(\"Hello, World!\")\n+  println(\"Hello, Scala!\")\n }"
-}
-```
-
-#### 2. Add New Methods (Search-First Approach)
-
-**Step 1: Search for insertion point**
-```json
-{
-  "function": "search_files",
-  "params": {
-    "workspace_name": "my-project",
-    "query": "object Utils",
-    "limit": 5
-  }
-}
-```
-
-**Step 2: Read file to understand structure**
-```json
-{
-  "function": "get_file_content",
-  "params": {
-    "workspace_name": "my-project",
-    "file_path": "src/main/scala/Utils.scala"
-  }
-}
-```
-
-**Discovered content:**
-```scala
-object Utils {
-  def existingMethod(): String = "existing"
-  
-  // End of object
-}
-```
-
-**Step 3: Create patch at correct position**
-```json
-{
-  "workspace_name": "my-project",
-  "patch": "--- a/src/main/scala/Utils.scala\n+++ b/src/main/scala/Utils.scala\n@@ -2,4 +2,10 @@\n object Utils {\n   def existingMethod(): String = \"existing\"\n   \n+  def newUtilityMethod(input: String): String = {\n+    input.trim.toLowerCase\n+  }\n+\n+  def anotherMethod(): Unit = {\n+    println(\"Added via patch\")\n+  }\n+\n   // End of object\n }"
-}
-```
-
-#### 3. Modify Existing Function (Search-First Approach)
-
-**Step 1: Search for function signature**
-```json
-{
-  "function": "search_files",
-  "params": {
-    "workspace_name": "my-project",
-    "query": "def calculateTotal",
-    "limit": 5
-  }
-}
-```
-
-**Step 2: Read surrounding context**
-```json
-{
-  "function": "get_file_content",
-  "params": {
-    "workspace_name": "my-project",
-    "file_path": "src/main/scala/Calculator.scala"
-  }
-}
-```
-
-**Discovered content:**
-```scala
-class Calculator {
-  private val taxRate = 0.08
-  
-  def calculateTotal(amount: Double): Double = {
-    amount + (amount * taxRate)
-  }
-  
-  def formatResult(value: Double): String = f"$value%.2f"
-}
-```
-
-**Step 3: Create patch with exact context**
-```json
-{
-  "workspace_name": "my-project",
-  "patch": "--- a/src/main/scala/Calculator.scala\n+++ b/src/main/scala/Calculator.scala\n@@ -2,7 +2,11 @@\n class Calculator {\n   private val taxRate = 0.08\n   \n   def calculateTotal(amount: Double): Double = {\n-    amount + (amount * taxRate)\n+    if (amount < 0) {\n+      throw new IllegalArgumentException(\"Amount cannot be negative\")\n+    }\n+    val tax = amount * taxRate\n+    amount + tax\n   }\n   \n   def formatResult(value: Double): String = f\"$value%.2f\""
-}
-```
-
-#### 4. Multi-File Refactoring (Search-First for Each File)
-
-**Step 1: Search in main file**
-```json
-{
-  "function": "search_files",
-  "params": {
-    "workspace_name": "my-project",
-    "query": "def factorial",
-    "limit": 10
-  }
-}
-```
-
-**Step 2: Read main file**
-```json
-{
-  "function": "get_file_content",
-  "params": {
-    "workspace_name": "my-project",
-    "file_path": "src/main/scala/Main.scala"
-  }
-}
-```
-
-**Step 3: Search for import patterns**
-```json
-{
-  "function": "search_files",
-  "params": {
-    "workspace_name": "my-project",
-    "query": "import",
-    "limit": 10
-  }
-}
-```
-
-**Step 4: Create multi-file patch with exact context**
-```json
-{
-  "workspace_name": "my-project",
-  "patch": "--- a/src/main/scala/Main.scala\n+++ b/src/main/scala/Main.scala\n@@ -1,12 +1,5 @@\n object Main extends App {\n   println(\"Hello, Updated Scala!\")\n-  \n-  def factorial(n: Int): Long = {\n-    if (n <= 1) 1L\n-    else n * factorial(n - 1)\n-  }\n-  \n-  def fibonacci(n: Int): Int = {\n-    if (n <= 1) n\n-    else fibonacci(n - 1) + fibonacci(n - 2)\n-  }\n+\n+  import MathUtils._\n   \n   println(s\"Factorial(5) = ${factorial(5)}\")\n\n--- /dev/null\n+++ b/src/main/scala/MathUtils.scala\n@@ -0,0 +1,11 @@\n+object MathUtils {\n+  def factorial(n: Int): Long = {\n+    if (n <= 1) 1L\n+    else n * factorial(n - 1)\n+  }\n+  \n+  def fibonacci(n: Int): Int = {\n+    if (n <= 1) n\n+    else fibonacci(n - 1) + fibonacci(n - 2)\n+  }\n+}"
-}
-```
-
-#### 5. Add Dependencies (Search build.sbt First)
-
-**Step 1: Search for dependency section**
-```json
-{
-  "function": "search_files",
-  "params": {
-    "workspace_name": "my-project",
-    "query": "libraryDependencies",
-    "limit": 5
-  }
-}
-```
-
-**Step 2: Read build.sbt content**
-```json
-{
-  "function": "get_file_content",
-  "params": {
-    "workspace_name": "my-project",
-    "file_path": "build.sbt"
-  }
-}
-```
-
-**Discovered content:**
-```scala
-ThisBuild / version := "0.1.0-SNAPSHOT"
-ThisBuild / scalaVersion := "3.3.0"
-
-lazy val root = (project in file("."))
-  .settings(
-    name := "my-project",
-    libraryDependencies ++= Seq(
-      "org.typelevel" %% "cats-core" % "2.9.0",
-      "org.scalatest" %% "scalatest" % "3.2.15" % Test
-    )
-  )
-```
-
-**Step 3: Create patch with exact context**
-```json
-{
-  "workspace_name": "my-project",
-  "patch": "--- a/build.sbt\n+++ b/build.sbt\n@@ -5,8 +5,10 @@\n lazy val root = (project in file(\".\"))\n   .settings(\n     name := \"my-project\",\n     libraryDependencies ++= Seq(\n       \"org.typelevel\" %% \"cats-core\" % \"2.9.0\",\n-      \"org.scalatest\" %% \"scalatest\" % \"3.2.15\" % Test\n+      \"org.scalatest\" %% \"scalatest\" % \"3.2.15\" % Test,\n+      \"org.scalamock\" %% \"scalamock\" % \"5.2.0\" % Test,\n+      \"io.circe\" %% \"circe-core\" % \"0.14.5\"\n     )\n   )"
-}
-```
-
-### 🎯 SEARCH-FIRST BEST PRACTICES
-
-#### 1. Multiple Search Strategies
-Use different search terms to find your target:
-
-```json
-// Search for function name
-{"function": "search_files", "params": {"workspace_name": "project", "query": "def processUser"}}
-
-// Search for class name  
-{"function": "search_files", "params": {"workspace_name": "project", "query": "class UserService"}}
-
-// Search for specific text
-{"function": "search_files", "params": {"workspace_name": "project", "query": "println(\"Starting\")"}}
-
-// Search for patterns
-{"function": "search_files", "params": {"workspace_name": "project", "query": "extends App"}}
-```
-
-#### 2. Verify Context Before Patching
-Always read the file after searching:
-
-```json
-// Found target in search results
-{
-  "file": "src/main/scala/UserService.scala",
-  "line": 15,
-  "content": "  def updateUser(id: String, data: UserData): Future[User] = {"
-}
-
-// Read the file to get full context
-{
-  "function": "get_file_content",
-  "params": {
-    "workspace_name": "project",
-    "file_path": "src/main/scala/UserService.scala"
-  }
-}
-```
-
-#### 3. Use Exact Content in Patches
-Copy the **exact text** from the file content into your patch:
-
-```diff
-# ✅ CORRECT - Uses exact content from file
---- a/src/main/scala/UserService.scala
-+++ b/src/main/scala/UserService.scala
-@@ -14,6 +14,9 @@
-   
-   def updateUser(id: String, data: UserData): Future[User] = {
-+    if (id.isEmpty) {
-+      throw new IllegalArgumentException("User ID cannot be empty")
-+    }
-     repository.update(id, data)
-   }
-
-# ❌ INCORRECT - Guessed content that doesn't match file
---- a/src/main/scala/UserService.scala
-+++ b/src/main/scala/UserService.scala
-@@ -1,3 +1,6 @@
- def updateUser(id: String, data: UserData): Future[User] = {
-+  if (id.isEmpty) {
-+    throw new IllegalArgumentException("User ID cannot be empty")
-+  }
-   repository.update(id, data)
- }
-```
-
-#### 4. Search for Import Locations
-When adding imports, search for existing import statements:
-
-```json
-{
-  "function": "search_files",
-  "params": {
-    "workspace_name": "my-project",
-    "query": "import",
-    "limit": 10
-  }
-}
-```
-
-#### 5. Search for Package Declarations
-When adding package statements, search for existing ones:
-
-```json
-{
-  "function": "search_files",
+  "function": "get_file_content_by_lines",
   "params": {
     "workspace_name": "my-project", 
-    "query": "package",
-    "limit": 10
+    "file_path": "src/main/scala/ModifiedFile.scala",
+    "start_line": 1,
+    "end_line": 100
   }
 }
 ```
 
-### 🚨 COMMON SEARCH-FIRST PATTERNS
+#### Step 2: Check Modified Content
+**Verify that:**
+- [ ] Your changes are present and correct
+- [ ] No unexpected modifications occurred
+- [ ] File structure remains intact
+- [ ] Line numbers align with your expectations
 
-#### Pattern 1: Adding Method to Existing Class
-```bash
-1. Search: "class ClassName" or "object ObjectName"
-2. Read: Get full file content
-3. Identify: Exact insertion point
-4. Patch: Add method with proper context
-```
-
-#### Pattern 2: Modifying Function Implementation
-```bash
-1. Search: "def functionName" 
-2. Read: Get surrounding code
-3. Identify: Function body boundaries
-4. Patch: Replace implementation with exact context
-```
-
-#### Pattern 3: Adding Dependencies
-```bash
-1. Search: "libraryDependencies" in build.sbt
-2. Read: Get current dependency list
-3. Identify: Exact format and indentation
-4. Patch: Add new dependencies maintaining format
-```
-
-#### Pattern 4: Import Management
-```bash
-1. Search: "import" statements in target file
-2. Read: Understand existing import structure
-3. Identify: Correct location for new imports
-4. Patch: Add imports in proper order
-```
-
-### ⚠️ PATCH CREATION FAILURES TO AVOID
-
-#### ❌ Creating Patches Without Context
-```diff
-# This will likely fail - no context verification
---- a/SomeFile.scala
-+++ b/SomeFile.scala
-@@ -1,1 +1,2 @@
-+new line
- existing line
-```
-
-#### ✅ Search-First Approach
-```json
-// Step 1: Search first
-{"function": "search_files", "params": {"query": "existing line"}}
-
-// Step 2: Read file  
-{"function": "get_file_content", "params": {"file_path": "SomeFile.scala"}}
-
-// Step 3: Create patch with exact context
-{
-  "patch": "--- a/SomeFile.scala\n+++ b/SomeFile.scala\n@@ -5,7 +5,8 @@\n   // surrounding context\n   existing line\n+  new line\n   // more context"
-}
-```
-
-## 📝 PATCH TEMPLATES - ONE CHANGE AT A TIME
-
-### 🚨 CRITICAL RULE: PATCH ONE LOCATION AT A TIME
-
-**⚠️ NEVER create patches with multiple hunks or changes to different parts of the same file in one patch. Always make ONE atomic change per patch.**
-
-### Template Categories
-
-#### 🔧 **Template 1: Add Single Line**
-```diff
---- a/path/to/file.scala
-+++ b/path/to/file.scala
-@@ -LINE_NUMBER,CONTEXT_SIZE +LINE_NUMBER,CONTEXT_SIZE+1 @@
- context_line_before
- existing_line
-+NEW_LINE_TO_ADD
- context_line_after
-```
-
-**Example Usage:**
+#### Step 3: Compilation Check
 ```json
 {
-  "function": "apply_patch",
+  "function": "sbt_compile",
   "params": {
     "workspace_name": "my-project",
-    "patch": "--- a/src/main/scala/Utils.scala\n+++ b/src/main/scala/Utils.scala\n@@ -3,5 +3,6 @@\n object Utils {\n   def existingMethod(): String = \"existing\"\n   \n+  def newMethod(): String = \"new\"\n+\n   // End of object\n }"
+    "timeout": 60
   }
 }
 ```
 
-#### 🔧 **Template 2: Replace Single Line**
-```diff
---- a/path/to/file.scala
-+++ b/path/to/file.scala
-@@ -LINE_NUMBER,CONTEXT_SIZE +LINE_NUMBER,CONTEXT_SIZE @@
- context_line_before
--OLD_LINE_TO_REPLACE
-+NEW_LINE_REPLACEMENT
- context_line_after
-```
+#### Step 4: Handle Verification Results
+- **✅ If verification passes**: Proceed to next file (if needed)
+- **❌ If verification fails**: 
+  1. Use `get_file_content_by_lines` to examine current state
+  2. Create corrective patch with exact current content
+  3. Apply corrective patch
+  4. **Repeat verification workflow**
 
-**Example Usage:**
+### 🔍 GET FILE CONTENT BY LINES - Usage Patterns
+
+#### Pattern 1: Read Entire Small File
 ```json
 {
-  "function": "apply_patch",
+  "function": "get_file_content_by_lines",
   "params": {
     "workspace_name": "my-project",
-    "patch": "--- a/src/main/scala/Main.scala\n+++ b/src/main/scala/Main.scala\n@@ -2,4 +2,4 @@\n object Main {\n-  println(\"Hello, World!\")\n+  println(\"Hello, Scala!\")\n }"
+    "file_path": "src/main/scala/Utils.scala",
+    "start_line": 1,
+    "end_line": 100
   }
 }
 ```
 
-#### 🔧 **Template 3: Remove Single Line**
-```diff
---- a/path/to/file.scala
-+++ b/path/to/file.scala
-@@ -LINE_NUMBER,CONTEXT_SIZE +LINE_NUMBER,CONTEXT_SIZE-1 @@
- context_line_before
--LINE_TO_REMOVE
- context_line_after
-```
-
-**Example Usage:**
+#### Pattern 2: Read Around Target Area
 ```json
 {
-  "function": "apply_patch",
+  "function": "get_file_content_by_lines",
   "params": {
     "workspace_name": "my-project",
-    "patch": "--- a/src/main/scala/Debug.scala\n+++ b/src/main/scala/Debug.scala\n@@ -5,7 +5,6 @@\n   def processData(input: String): String = {\n     val cleaned = input.trim\n-    println(s\"Debug: processing $cleaned\")  // Remove debug line\n     cleaned.toUpperCase\n   }"
+    "file_path": "src/main/scala/LargeFile.scala",
+    "start_line": 45,
+    "end_line": 65
   }
 }
 ```
 
-#### 🔧 **Template 4: Add Multiple Lines (Single Block)**
-```diff
---- a/path/to/file.scala
-+++ b/path/to/file.scala
-@@ -LINE_NUMBER,CONTEXT_SIZE +LINE_NUMBER,CONTEXT_SIZE+LINES_ADDED @@
- context_line_before
- existing_line
-+FIRST_NEW_LINE
-+SECOND_NEW_LINE
-+THIRD_NEW_LINE
- context_line_after
-```
-
-**Example Usage:**
+#### Pattern 3: Read From Search Results
 ```json
-{
-  "function": "apply_patch",
-  "params": {
-    "workspace_name": "my-project",
-    "patch": "--- a/src/main/scala/Validator.scala\n+++ b/src/main/scala/Validator.scala\n@@ -4,6 +4,9 @@\n   def validate(input: String): Boolean = {\n     if (input == null) return false\n     \n+    if (input.trim.isEmpty) {\n+      throw new IllegalArgumentException(\"Input cannot be empty\")\n+    }\n+    \n     input.length > 0\n   }"
-  }
-}
-```
-
-#### 🔧 **Template 5: Replace Function Body**
-```diff
---- a/path/to/file.scala
-+++ b/path/to/file.scala
-@@ -START_LINE,OLD_COUNT +START_LINE,NEW_COUNT @@
- context_before_function
- def functionName(params): ReturnType = {
--  OLD_FUNCTION_BODY_LINE_1
--  OLD_FUNCTION_BODY_LINE_2
-+  NEW_FUNCTION_BODY_LINE_1
-+  NEW_FUNCTION_BODY_LINE_2
-+  NEW_FUNCTION_BODY_LINE_3
- }
- context_after_function
-```
-
-**Example Usage:**
-```json
-{
-  "function": "apply_patch",
-  "params": {
-    "workspace_name": "my-project",
-    "patch": "--- a/src/main/scala/Calculator.scala\n+++ b/src/main/scala/Calculator.scala\n@@ -5,8 +5,11 @@\n   \n   def calculate(x: Int, y: Int): Int = {\n-    x + y\n+    if (x < 0 || y < 0) {\n+      throw new IllegalArgumentException(\"Negative numbers not allowed\")\n+    }\n+    val result = x + y\n+    result\n   }\n   \n   def format(value: Int): String = value.toString"
-  }
-}
-```
-
-#### 🔧 **Template 6: Add Import Statement**
-```diff
---- a/path/to/file.scala
-+++ b/path/to/file.scala
-@@ -IMPORT_LINE,CONTEXT_SIZE +IMPORT_LINE,CONTEXT_SIZE+1 @@
- existing_import_or_package
-+import new.package.ClassName
- 
- class_or_object_definition
-```
-
-**Example Usage:**
-```json
-{
-  "function": "apply_patch",
-  "params": {
-    "workspace_name": "my-project",
-    "patch": "--- a/src/main/scala/Service.scala\n+++ b/src/main/scala/Service.scala\n@@ -1,4 +1,5 @@\n package com.example\n \n+import scala.concurrent.Future\n import scala.util.Try\n \n class Service {"
-  }
-}
-```
-
-#### 🔧 **Template 7: Create New File**
-```diff
---- /dev/null
-+++ b/path/to/new/file.scala
-@@ -0,0 +1,NUMBER_OF_LINES @@
-+FIRST_LINE_OF_NEW_FILE
-+SECOND_LINE_OF_NEW_FILE
-+...
-+LAST_LINE_OF_NEW_FILE
-```
-
-**Example Usage:**
-```json
-{
-  "function": "apply_patch",
-  "params": {
-    "workspace_name": "my-project",
-    "patch": "--- /dev/null\n+++ b/src/main/scala/Helper.scala\n@@ -0,0 +1,8 @@\n+package com.example\n+\n+object Helper {\n+  def formatString(input: String): String = {\n+    input.trim.toLowerCase.capitalize\n+  }\n+}"
-  }
-}
-```
-
-### 🎯 **ATOMIC PATCH WORKFLOW**
-
-#### Step 1: Identify Single Change
-Before creating any patch, identify exactly **ONE** thing you want to change:
-- ✅ Add one method
-- ✅ Modify one function  
-- ✅ Add one import
-- ✅ Change one line
-- ❌ Add method AND modify imports
-- ❌ Change multiple functions
-- ❌ Multiple unrelated changes
-
-#### Step 2: Search for Exact Location
-```json
+// First, search to find location
 {
   "function": "search_files",
   "params": {
     "workspace_name": "my-project",
-    "query": "EXACT_CODE_YOU_WANT_TO_CHANGE",
+    "query": "def targetFunction",
     "limit": 5
   }
 }
-```
 
-#### Step 3: Read File for Context
-```json
+// Then read around that location (assuming function found at line 23)
 {
-  "function": "get_file_content",
+  "function": "get_file_content_by_lines", 
   "params": {
     "workspace_name": "my-project",
-    "file_path": "path/from/search/results"
+    "file_path": "src/main/scala/Service.scala",
+    "start_line": 18,
+    "end_line": 35
   }
 }
 ```
 
-#### Step 4: Choose Appropriate Template
-Select the template that matches your change type:
-- Adding lines → Template 1 or 4
-- Replacing lines → Template 2 or 5  
-- Removing lines → Template 3
-- New import → Template 6
-- New file → Template 7
+### ⚠️ PATCH VALIDATION
 
-#### Step 5: Fill Template with Exact Content
-```json
-{
-  "function": "apply_patch",
-  "params": {
-    "workspace_name": "my-project",
-    "patch": "TEMPLATE_FILLED_WITH_EXACT_CONTENT"
-  }
-}
-```
+**Before applying any patch, ensure:**
+- [ ] You called `get_file_content_by_lines` to get current file state
+- [ ] **ONLY ONE file is being modified**
+- [ ] **ONLY ONE location within that file is being changed**
+- [ ] File headers are correct (`--- a/path` and `+++ b/path`)
+- [ ] Hunk header mathematics are accurate (`@@ -old_start,old_count +new_start,new_count @@`)
+- [ ] Context lines match exactly what's in the file
+- [ ] Line prefixes are valid (space, `+`, `-`, `\`)
+- [ ] Only one logical change per patch
 
-### 📋 **TEMPLATE SELECTION GUIDE**
-
-| What you want to do | Template to use | Key markers |
-|---------------------|-----------------|-------------|
-| Add 1 line | Template 1 | `+1` in hunk header |
-| Replace 1 line | Template 2 | Same count in hunk header |
-| Remove 1 line | Template 3 | `-1` in hunk header |
-| Add method/block | Template 4 | Multiple `+` lines |
-| Rewrite function | Template 5 | Multiple `-` and `+` lines |
-| Add import | Template 6 | Near top of file |
-| Create new file | Template 7 | `/dev/null` source |
-
-### 🚨 **MULTIPLE CHANGES WORKFLOW**
-
-If you need to make multiple changes, **create separate patches for each change**:
-
-#### ❌ WRONG - Multiple changes in one patch
-```json
-{
-  "patch": "--- a/File.scala\n+++ b/File.scala\n@@ -1,5 +1,6 @@\n+import NewPackage\n class MyClass {\n   def method1(): String = {\n-    \"old\"\n+    \"new\"\n   }\n@@ -10,12 +11,15 @@\n   def method2(): Int = {\n+    if (condition) return 0\n     42\n   }"
-}
-```
-
-#### ✅ CORRECT - Separate patches for each change
-```json
-// First patch: Add import
-{
-  "patch": "--- a/File.scala\n+++ b/File.scala\n@@ -1,3 +1,4 @@\n package com.example\n \n+import NewPackage\n class MyClass {"
-}
-
-// Second patch: Modify method1
-{
-  "patch": "--- a/File.scala\n+++ b/File.scala\n@@ -4,6 +4,6 @@\n class MyClass {\n   def method1(): String = {\n-    \"old\"\n+    \"new\"\n   }"
-}
-
-// Third patch: Add validation to method2
-{
-  "patch": "--- a/File.scala\n+++ b/File.scala\n@@ -8,5 +8,6 @@\n   \n   def method2(): Int = {\n+    if (condition) return 0\n     42\n   }"
-}
-```
-
-### 🔧 **TEMPLATE DEBUGGING CHECKLIST**
-
-Before applying any patch, verify:
-- [ ] **File path is correct** (`--- a/` and `+++ b/` match actual file)
-- [ ] **Hunk header math is correct** (line numbers and counts match content)
-- [ ] **Context lines are exact** (copied exactly from file content)
-- [ ] **Only ONE change** is being made
-- [ ] **Line prefixes are valid** (space, `+`, `-`, `\` only)
-- [ ] **No mixed line endings** (consistent `\n`)
-
-### 💡 **TEMPLATE EXAMPLES WITH EXPLANATIONS**
-
-#### Example 1: Add Method (Template 4)
-**Search Result:** Found `object Utils` at line 3 in `Utils.scala`
-**File Content:** 
-```scala
-package com.example
-
-object Utils {
-  def existing(): String = "test"
-  
-  // End of object
-}
-```
-
-**Template Application:**
-```json
-{
-  "patch": "--- a/src/main/scala/Utils.scala\n+++ b/src/main/scala/Utils.scala\n@@ -4,5 +4,9 @@\n object Utils {\n   def existing(): String = \"test\"\n   \n+  def newMethod(input: String): String = {\n+    input.toUpperCase\n+  }\n+\n   // End of object\n }"
-}
-```
-
-**Explanation:**
-- `@@ -4,5 +4,9 @@` means: starting at line 4, showing 5 old lines, replacing with 9 new lines
-- Context before: `object Utils {` and `def existing(): String = "test"`  
-- Context after: `// End of object`
-- Change: Added 4 new lines (+4 in count)
-
-#### Example 2: Replace Line (Template 2)
-**Search Result:** Found `println("Hello")` at line 6 in `Main.scala`
-**File Content:**
-```scala
-object Main {
-  def main(args: Array[String]): Unit = {
-    println("Hello")
-    val x = 42
-  }
-}
-```
-
-**Template Application:**
-```json
-{
-  "patch": "--- a/src/main/scala/Main.scala\n+++ b/src/main/scala/Main.scala\n@@ -2,5 +2,5 @@\n object Main {\n   def main(args: Array[String]): Unit = {\n-    println(\"Hello\")\n+    println(\"Hello, World!\")\n     val x = 42\n   }"
-}
-```
-
-**Explanation:**
-- `@@ -2,5 +2,5 @@` means: starting at line 2, 5 lines total, count stays the same
-- One line removed (`-`), one line added (`+`)
-- Context preserved before and after the change
+**After applying any patch, ensure:**
+- [ ] You called `get_file_content_by_lines` to verify the result
+- [ ] Changes are present and correct
+- [ ] No unintended side effects occurred
+- [ ] File compiles successfully (`sbt_compile`)
 
 ## Available Operations
 
