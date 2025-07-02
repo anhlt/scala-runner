@@ -150,6 +150,101 @@ lazy val root = (project in file("."))
             "tree": self._build_tree(workspace_path, workspace_path, show_all=show_all)
         }
 
+    async def get_file_tree_string(self, workspace_name: str, show_all: bool = False) -> Dict:
+        """Get file tree structure for a workspace as a tree-formatted string
+        
+        Args:
+            workspace_name: Name of the workspace
+            show_all: If False (default), filters out compiler-generated files and build artifacts.
+                     If True, shows all files including .git, target/, .bsp/, etc.
+        """
+        workspace_path = self.workspaces_dir / workspace_name
+        
+        if not workspace_path.exists():
+            raise ValueError(f"Workspace '{workspace_name}' not found")
+        
+        # Generate tree string output
+        tree_lines = []
+        tree_lines.append(workspace_name)
+        
+        # Get all items at root level
+        items = []
+        try:
+            for item in sorted(workspace_path.iterdir()):
+                if show_all or not self._should_exclude_from_tree(item):
+                    items.append(item)
+        except PermissionError:
+            tree_lines.append("├── [Permission Denied]")
+            return {
+                "workspace_name": workspace_name,
+                "tree_output": "\n".join(tree_lines),
+                "total_files": 0,
+                "total_directories": 0
+            }
+        
+        # Count totals
+        file_count, dir_count = self._count_tree_items(workspace_path, show_all)
+        
+        # Build the tree representation
+        for i, item in enumerate(items):
+            is_last = (i == len(items) - 1)
+            self._append_tree_item(item, workspace_path, tree_lines, "", is_last, show_all)
+        
+        return {
+            "workspace_name": workspace_name,
+            "tree_output": "\n".join(tree_lines),
+            "total_files": file_count,
+            "total_directories": dir_count
+        }
+
+    def _append_tree_item(self, path: Path, root_path: Path, lines: List[str], prefix: str, is_last: bool, show_all: bool):
+        """Append an item to the tree lines with proper formatting"""
+        # Choose the connector symbol
+        connector = "└── " if is_last else "├── "
+        
+        # Add the current item
+        name = path.name
+        if path.is_dir():
+            name += "/"
+        lines.append(f"{prefix}{connector}{name}")
+        
+        # If it's a directory, add its children
+        if path.is_dir():
+            try:
+                children = []
+                for child in sorted(path.iterdir()):
+                    if show_all or not self._should_exclude_from_tree(child):
+                        children.append(child)
+                
+                # Prepare prefix for children
+                child_prefix = prefix + ("    " if is_last else "│   ")
+                
+                # Recursively add children
+                for i, child in enumerate(children):
+                    child_is_last = (i == len(children) - 1)
+                    self._append_tree_item(child, root_path, lines, child_prefix, child_is_last, show_all)
+                    
+            except PermissionError:
+                child_prefix = prefix + ("    " if is_last else "│   ")
+                lines.append(f"{child_prefix}└── [Permission Denied]")
+
+    def _count_tree_items(self, path: Path, show_all: bool) -> tuple[int, int]:
+        """Count files and directories in the tree"""
+        file_count = 0
+        dir_count = 0
+        
+        try:
+            for item in path.rglob("*"):
+                if show_all or not self._should_exclude_from_tree(item):
+                    if item.is_file():
+                        file_count += 1
+                    elif item.is_dir():
+                        dir_count += 1
+        except PermissionError:
+            pass
+        
+        return file_count, dir_count
+
     def _should_exclude_from_tree(self, path: Path) -> bool:
         """
         Check if a file or directory should be excluded from the file tree.
@@ -330,6 +425,62 @@ lazy val root = (project in file("."))
             "file_path": file_path,
             "content": content,
             "size": len(content),
+            "extension": full_file_path.suffix.lstrip('.')
+        }
+
+    async def get_file_content_by_lines(self, workspace_name: str, file_path: str, start_line: int, end_line: int) -> Dict:
+        """Get file content for a specific range of lines (1-indexed, inclusive)
+        
+        Args:
+            workspace_name: Name of the workspace
+            file_path: Path to the file within the workspace
+            start_line: Starting line number (1-indexed, inclusive)
+            end_line: Ending line number (1-indexed, inclusive)
+            
+        Returns:
+            Dict containing the file content for the specified line range
+        """
+        workspace_path = self.workspaces_dir / workspace_name
+        full_file_path = workspace_path / file_path
+        
+        if not workspace_path.exists():
+            raise ValueError(f"Workspace '{workspace_name}' not found")
+        
+        if not full_file_path.exists():
+            raise ValueError(f"File '{file_path}' not found")
+        
+        if start_line < 1:
+            raise ValueError("start_line must be >= 1")
+        
+        if end_line < start_line:
+            raise ValueError("end_line must be >= start_line")
+        
+        async with aiofiles.open(full_file_path, "r") as f:
+            content = await f.read()
+        
+        lines = content.split('\n')
+        total_lines = len(lines)
+        
+        # Handle end_line exceeding file length
+        actual_end_line = min(end_line, total_lines)
+        
+        if start_line > total_lines:
+            raise ValueError(f"start_line ({start_line}) exceeds file length ({total_lines})")
+        
+        # Extract the requested lines (convert to 0-indexed for slicing)
+        selected_lines = lines[start_line - 1:actual_end_line]
+        selected_content = '\n'.join(selected_lines)
+        
+        return {
+            "workspace_name": workspace_name,
+            "file_path": file_path,
+            "content": selected_content,
+            "start_line": start_line,
+            "end_line": actual_end_line,
+            "requested_end_line": end_line,
+            "lines_returned": len(selected_lines),
+            "total_file_lines": total_lines,
+            "size": len(selected_content),
             "extension": full_file_path.suffix.lstrip('.')
         }
 
@@ -682,10 +833,20 @@ lazy val root = (project in file("."))
                                 "content": line.strip()
                             })
                     
+                    # Extract the relative file path (remove workspace name prefix)
+                    # The indexed filepath is in format "workspace_name/relative_path"
+                    indexed_filepath = result["filepath"]
+                    if "/" in indexed_filepath:
+                        # Remove the workspace name prefix to get path relative to workspace
+                        relative_path = "/".join(indexed_filepath.split("/")[1:])
+                    else:
+                        # Handle edge case where filepath might not have workspace prefix
+                        relative_path = indexed_filepath
+                    
                     search_results.append({
                         "workspace": result["workspace"],
-                        "filepath": result["filepath"],
-                        "file_path": result["filepath"],  # For backward compatibility 
+                        "filepath": relative_path,  # Path relative to workspace directory
+                        "file_path": relative_path,  # For backward compatibility 
                         "filename": result["filename"],
                         "extension": result["extension"],
                         "score": result.score,

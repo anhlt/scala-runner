@@ -153,4 +153,27 @@ async def get_file_content(request: Request, workspace_name: str, file_path: str
         raise HTTPException(404, str(e))
     except Exception as e:
         logger.error(f"Error getting file content: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@router.get("/{workspace_name}/{file_path:path}/lines", summary="Get file content by line range")
+@limiter.limit(RATE_LIMIT)
+async def get_file_content_by_lines(request: Request, workspace_name: str, file_path: str, start_line: int, end_line: int):
+    """Get the content of a file for a specific range of lines
+    
+    Args:
+        workspace_name: Name of the workspace
+        file_path: Path to the file within the workspace
+        start_line: Starting line number (1-indexed, inclusive)
+        end_line: Ending line number (1-indexed, inclusive)
+    """
+    try:
+        result = await workspace_manager.get_file_content_by_lines(
+            workspace_name, file_path, start_line, end_line
+        )
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Error getting file content by lines: {e}")
         raise HTTPException(500, f"Internal server error: {str(e)}") 
