@@ -687,8 +687,8 @@ class TestSearchOperations:
         assert results[0]["workspace"] == workspace_name
         assert results[0]["filename"] == "test.scala"
         assert results[0]["extension"] == "scala"
-        assert results[0]["filepath"] == f"{workspace_name}/test.scala"
-        assert results[0]["file_path"] == f"{workspace_name}/test.scala"  # backward compatibility
+        assert results[0]["filepath"] == "test.scala"  # Now returns relative path
+        assert results[0]["file_path"] == "test.scala"  # backward compatibility - also relative
         assert len(results[0]["matching_lines"]) >= 2  # Should find at least 2 matching lines
         
         # Check that matching lines contain our query
