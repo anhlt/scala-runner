@@ -127,6 +127,26 @@ async def get_workspace_tree(request: Request, workspace_name: str, show_all: bo
         raise HTTPException(500, f"Internal server error: {str(e)}")
 
 
+@router.get("/{workspace_name}/tree/string", summary="Get workspace file tree as string")
+@limiter.limit(RATE_LIMIT)
+async def get_workspace_tree_string(request: Request, workspace_name: str, show_all: bool = False):
+    """Get the file tree structure of a workspace as a tree-formatted string
+    
+    Args:
+        workspace_name: Name of the workspace
+        show_all: If False (default), filters out compiler-generated files and build artifacts.
+                 If True, shows all files including .git, target/, .bsp/, etc.
+    """
+    try:
+        result = await workspace_manager.get_file_tree_string(workspace_name, show_all=show_all)
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"Error getting workspace tree string: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
 @router.post("/clone", summary="Clone workspace from Git repository")
 @limiter.limit(RATE_LIMIT)
 async def clone_workspace_from_git(request: Request, payload: CloneWorkspaceRequest):

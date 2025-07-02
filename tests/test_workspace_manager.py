@@ -1737,3 +1737,79 @@ line5"""
         result = workspace_manager._validate_patch_syntax(bad_hunk_patch)
         assert result["valid"] is False
         assert result["error_code"] == "INVALID_HUNK_HEADER" 
+
+    async def test_get_file_content_by_lines(self):
+        """Test getting file content by line range"""
+        # Create a workspace and file with multiple lines
+        await self.workspace_manager.create_workspace("test-lines")
+        
+        # Create a test file with known content
+        test_content = """Line 1
+Line 2
+Line 3
+Line 4
+Line 5
+Line 6
+Line 7
+Line 8
+Line 9
+Line 10"""
+        
+        await self.workspace_manager.create_file("test-lines", "test.txt", test_content)
+        
+        # Test getting lines 3-6
+        result = await self.workspace_manager.get_file_content_by_lines(
+            "test-lines", "test.txt", 3, 6
+        )
+        
+        expected_content = "Line 3\nLine 4\nLine 5\nLine 6"
+        
+        self.assertEqual(result["workspace_name"], "test-lines")
+        self.assertEqual(result["file_path"], "test.txt")
+        self.assertEqual(result["content"], expected_content)
+        self.assertEqual(result["start_line"], 3)
+        self.assertEqual(result["end_line"], 6)
+        self.assertEqual(result["lines_returned"], 4)
+        self.assertEqual(result["total_file_lines"], 10)
+        
+        # Test getting lines beyond file end
+        result = await self.workspace_manager.get_file_content_by_lines(
+            "test-lines", "test.txt", 8, 15
+        )
+        
+        expected_content = "Line 8\nLine 9\nLine 10"
+        self.assertEqual(result["content"], expected_content)
+        self.assertEqual(result["start_line"], 8)
+        self.assertEqual(result["end_line"], 10)  # actual end line
+        self.assertEqual(result["requested_end_line"], 15)  # requested end line
+        self.assertEqual(result["lines_returned"], 3)
+        
+        # Test single line
+        result = await self.workspace_manager.get_file_content_by_lines(
+            "test-lines", "test.txt", 5, 5
+        )
+        
+        self.assertEqual(result["content"], "Line 5")
+        self.assertEqual(result["lines_returned"], 1)
+        
+        # Test error cases
+        with self.assertRaises(ValueError):
+            # Invalid start line
+            await self.workspace_manager.get_file_content_by_lines(
+                "test-lines", "test.txt", 0, 5
+            )
+        
+        with self.assertRaises(ValueError):
+            # End line before start line
+            await self.workspace_manager.get_file_content_by_lines(
+                "test-lines", "test.txt", 5, 3
+            )
+        
+        with self.assertRaises(ValueError):
+            # Start line beyond file
+            await self.workspace_manager.get_file_content_by_lines(
+                "test-lines", "test.txt", 15, 20
+            )
+        
+        # Cleanup
+        await self.workspace_manager.delete_workspace("test-lines") 

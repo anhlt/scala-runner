@@ -119,6 +119,16 @@ class Tools:
             await _emit(__event_emitter__, msg, done=True)
             return {"error": msg}
 
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, msg, done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
+
         except Exception as e:
             await _emit(__event_emitter__, f"Ping failed: {e}", done=True)
             return {"error": str(e)}
@@ -198,6 +208,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, f"Workspace '{name}' created", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to create workspace: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to create workspace: {e}", done=True)
             return {"error": str(e)}
@@ -217,6 +236,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "Workspaces listed", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to list workspaces: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to list workspaces: {e}", done=True)
             return {"error": str(e)}
@@ -238,6 +266,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, f"Workspace '{workspace_name}' deleted", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to delete workspace: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to delete workspace: {e}", done=True)
             return {"error": str(e)}
@@ -266,6 +303,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, f"Repository cloned to workspace '{name}'", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to clone repository: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to clone repository: {e}", done=True)
             return {"error": str(e)}
@@ -299,8 +345,59 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "File tree retrieved", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to get file tree: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to get file tree: {e}", done=True)
+            return {"error": str(e)}
+
+    async def get_workspace_tree_string(
+        self,
+        workspace_name: str,
+        show_all: bool = False,
+        __event_emitter__: Optional[Callable[[Dict], None]] = None,
+    ) -> Union[Dict, Dict[str, str]]:
+        """Get the file tree structure of a workspace as a tree-formatted string
+        
+        Args:
+            workspace_name: Name of the workspace
+            show_all: If False (default), filters out compiler-generated files and build artifacts.
+                     If True, shows all files including .git, target/, .bsp/, etc.
+        """
+        await _emit(__event_emitter__, f"Getting tree string for '{workspace_name}'…")
+        try:
+            params = {}
+            if show_all:
+                params["show_all"] = True
+                
+            async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
+                resp = await client.get(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspaces/{workspace_name}/tree/string",
+                    params=params,
+                    headers=_build_headers(),
+                )
+            resp.raise_for_status()
+            result = resp.json()
+            await _emit(__event_emitter__, "Tree string retrieved", done=True)
+            return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to get tree string: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
+        except Exception as e:
+            await _emit(__event_emitter__, f"Failed to get tree string: {e}", done=True)
             return {"error": str(e)}
 
     # File Operations
@@ -328,6 +425,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, f"File '{file_path}' created", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to create file: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to create file: {e}", done=True)
             return {"error": str(e)}
@@ -350,8 +456,58 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, f"File '{file_path}' content retrieved", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to read file: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to read file: {e}", done=True)
+            return {"error": str(e)}
+
+    async def get_file_content_by_lines(
+        self,
+        workspace_name: str,
+        file_path: str,
+        start_line: int,
+        end_line: int,
+        __event_emitter__: Optional[Callable[[Dict], None]] = None,
+    ) -> Union[Dict, Dict[str, str]]:
+        """Get the content of a file for a specific range of lines
+        
+        Args:
+            workspace_name: Name of the workspace
+            file_path: Path to the file within the workspace
+            start_line: Starting line number (1-indexed, inclusive)
+            end_line: Ending line number (1-indexed, inclusive)
+        """
+        await _emit(__event_emitter__, f"Reading lines {start_line}-{end_line} from '{file_path}' in '{workspace_name}'…")
+        try:
+            async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
+                resp = await client.get(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/files/{workspace_name}/{file_path}/lines",
+                    params={"start_line": start_line, "end_line": end_line},
+                    headers=_build_headers(),
+                )
+            resp.raise_for_status()
+            result = resp.json()
+            await _emit(__event_emitter__, f"File '{file_path}' lines {start_line}-{end_line} retrieved", done=True)
+            return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to read file lines: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
+        except Exception as e:
+            await _emit(__event_emitter__, f"Failed to read file lines: {e}", done=True)
             return {"error": str(e)}
 
     async def update_file(
@@ -378,6 +534,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, f"File '{file_path}' updated", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to update file: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to update file: {e}", done=True)
             return {"error": str(e)}
@@ -400,6 +565,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, f"File '{file_path}' deleted", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to delete file: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to delete file: {e}", done=True)
             return {"error": str(e)}
@@ -426,6 +600,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "Patch applied successfully", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to apply patch: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to apply patch: {e}", done=True)
             return {"error": str(e)}
@@ -454,6 +637,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "SBT compilation completed", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"SBT compilation failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"SBT compilation failed: {e}", done=True)
             return {"error": str(e)}
@@ -484,6 +676,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "SBT project run completed", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"SBT run failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"SBT run failed: {e}", done=True)
             return {"error": str(e)}
@@ -514,6 +715,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "SBT tests completed", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"SBT tests failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"SBT tests failed: {e}", done=True)
             return {"error": str(e)}
@@ -536,6 +746,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "SBT project cleaned", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"SBT clean failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"SBT clean failed: {e}", done=True)
             return {"error": str(e)}
@@ -564,6 +783,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, f"SBT command '{command}' completed", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"SBT command failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"SBT command failed: {e}", done=True)
             return {"error": str(e)}
@@ -586,6 +814,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "Git status retrieved", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to get Git status: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to get Git status: {e}", done=True)
             return {"error": str(e)}
@@ -613,6 +850,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "Files added to Git staging", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to add files to Git: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to add files to Git: {e}", done=True)
             return {"error": str(e)}
@@ -644,6 +890,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "Git commit completed", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Git commit failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Git commit failed: {e}", done=True)
             return {"error": str(e)}
@@ -675,6 +930,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, f"Search completed, found {result.get('data', {}).get('count', 0)} results", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Search failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Search failed: {e}", done=True)
             return {"error": str(e)}
@@ -698,6 +962,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "Bash session created", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to create bash session: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to create bash session: {e}", done=True)
             return {"error": str(e)}
@@ -728,6 +1001,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "Command executed", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Command execution failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Command execution failed: {e}", done=True)
             return {"error": str(e)}
@@ -754,6 +1036,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "Bash sessions listed", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to list bash sessions: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to list bash sessions: {e}", done=True)
             return {"error": str(e)}
@@ -775,6 +1066,15 @@ class Tools:
             result = resp.json()
             await _emit(__event_emitter__, "Bash session closed", done=True)
             return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to close bash session: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Failed to close bash session: {e}", done=True)
             return {"error": str(e)} 
