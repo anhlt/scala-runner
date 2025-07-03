@@ -1115,6 +1115,124 @@ lazy val root = (project in file("."))
         
         return patches
 
+    def _normalize_spaces_for_matching(self, content: str) -> str:
+        """Normalize spaces in content for flexible matching"""
+        if not content:
+            return content
+        
+        lines = content.split('\n')
+        normalized_lines = []
+        
+        for line in lines:
+            # Strip leading/trailing whitespace and collapse multiple spaces
+            normalized_line = ' '.join(line.strip().split())
+            normalized_lines.append(normalized_line)
+        
+        return '\n'.join(normalized_lines)
+    
+    def _preserve_indentation_in_replacement(self, original_content: str, replacement_content: str) -> str:
+        """Apply the indentation pattern from original content to replacement content"""
+        if not original_content or not replacement_content:
+            return replacement_content
+        
+        original_lines = original_content.split('\n')
+        replacement_lines = replacement_content.split('\n')
+        
+        # Extract indentation patterns from original content
+        indentations = []
+        for line in original_lines:
+            if line.strip():  # Only consider non-empty lines
+                # Get the leading whitespace
+                indent = len(line) - len(line.lstrip())
+                indentations.append(line[:indent])
+            else:
+                indentations.append('')  # Empty line
+        
+        # Get the indentation of the last line in search content for extra lines
+        last_line_indent = ''
+        if indentations:
+            # Find the last non-empty indentation
+            for indent in reversed(indentations):
+                if indent:
+                    last_line_indent = indent
+                    break
+        
+        # Apply indentation to replacement content
+        result_lines = []
+        for i, replacement_line in enumerate(replacement_lines):
+            if replacement_line.strip() == '':
+                result_lines.append('')  # Keep empty lines empty
+                continue
+                
+            if i < len(indentations):
+                # Use the corresponding indentation from original
+                result_lines.append(indentations[i] + replacement_line.strip())
+            else:
+                # For extra lines: use the indentation of the last line from search
+                result_lines.append(last_line_indent + replacement_line.strip())
+        
+        return '\n'.join(result_lines)
+    
+    def _find_best_match_with_normalized_spaces(self, original_content: str, search_content: str) -> Dict:
+        """Find the best matching location considering normalized spaces"""
+        if not search_content.strip():
+            return {"found": False, "start_pos": -1, "end_pos": -1}
+        
+        # Normalize both contents for comparison
+        normalized_original = self._normalize_spaces_for_matching(original_content)
+        normalized_search = self._normalize_spaces_for_matching(search_content)
+        
+        # Find the position in normalized content
+        normalized_pos = normalized_original.find(normalized_search)
+        if normalized_pos == -1:
+            return {"found": False, "start_pos": -1, "end_pos": -1}
+        
+        # Map back to original content position
+        # Count characters up to the match position in normalized content
+        original_lines = original_content.split('\n')
+        normalized_lines = normalized_original.split('\n')
+        search_lines = normalized_search.split('\n')
+        
+        # Find which line the match starts on
+        chars_counted = 0
+        target_line = 0
+        
+        for i, norm_line in enumerate(normalized_lines):
+            if chars_counted + len(norm_line) >= normalized_pos:
+                target_line = i
+                break
+            chars_counted += len(norm_line) + 1  # +1 for newline
+        
+        # Try to find the corresponding section in original content
+        search_line_count = len(search_lines)
+        
+        # Look for the best matching section around the target line
+        best_match = {"found": False, "start_pos": -1, "end_pos": -1}
+        best_ratio = 0
+        
+        for start_line in range(max(0, target_line - 2), min(len(original_lines), target_line + 3)):
+            if start_line + search_line_count > len(original_lines):
+                continue
+            
+            end_line = start_line + search_line_count
+            candidate_lines = original_lines[start_line:end_line]
+            candidate_text = '\n'.join(candidate_lines)
+            
+            # Normalize candidate for comparison
+            normalized_candidate = self._normalize_spaces_for_matching(candidate_text)
+            
+            # Calculate similarity
+            ratio = difflib.SequenceMatcher(None, normalized_search, normalized_candidate).ratio()
+            
+            if ratio > best_ratio and ratio > 0.8:  # High threshold for normalized matching
+                best_ratio = ratio
+                # Calculate character positions
+                start_pos = sum(len(line) + 1 for line in original_lines[:start_line])
+                end_pos = start_pos + len(candidate_text)
+                best_match = {"found": True, "start_pos": start_pos, "end_pos": end_pos}
+        
+        return best_match
+
     async def _apply_search_replace_to_file(self, workspace_path: Path, file_path: str, search_content: str, replace_content: str) -> Dict:
         """Apply search-replace operation to a specific file"""
         full_path = workspace_path / file_path
@@ -1136,17 +1254,32 @@ lazy val root = (project in file("."))
             else:
                 # Try exact match first
                 if search_content in original_content:
-                    new_content = original_content.replace(search_content, replace_content, 1)
+                    # For exact match, preserve indentation from the original matched content
+                    start_pos = original_content.find(search_content)
+                    end_pos = start_pos + len(search_content)
+                    matched_content = original_content[start_pos:end_pos]
+                    indentation_preserved_replacement = self._preserve_indentation_in_replacement(matched_content, replace_content)
+                    new_content = original_content[:start_pos] + indentation_preserved_replacement + original_content[end_pos:]
                 else:
-                    # Try fuzzy matching for more flexible replacement
-                    fuzzy_result = self._fuzzy_replace(original_content, search_content, replace_content)
-                    if fuzzy_result["found"]:
-                        new_content = fuzzy_result["content"]
+                    # Try space-normalized matching
+                    match_result = self._find_best_match_with_normalized_spaces(original_content, search_content)
+                    if match_result["found"]:
+                        # Replace the matched section with preserved indentation
+                        start_pos = match_result["start_pos"]
+                        end_pos = match_result["end_pos"]
+                        matched_content = original_content[start_pos:end_pos]
+                        indentation_preserved_replacement = self._preserve_indentation_in_replacement(matched_content, replace_content)
+                        new_content = original_content[:start_pos] + indentation_preserved_replacement + original_content[end_pos:]
                     else:
-                        return {
-                            "success": False,
-                            "error": f"Search content not found in {file_path}. Searched for: {search_content[:100]}..."
-                        }
+                        # Try fuzzy matching for more flexible replacement
+                        fuzzy_result = self._fuzzy_replace(original_content, search_content, replace_content)
+                        if fuzzy_result["found"]:
+                            new_content = fuzzy_result["content"]
+                        else:
+                            return {
+                                "success": False,
+                                "error": f"Search content not found in {file_path}. Searched for: {search_content[:100]}..."
+                            }
         
         # Write the modified file
             async with aiofiles.open(full_path, "w") as f:
@@ -1165,7 +1298,7 @@ lazy val root = (project in file("."))
             }
 
     def _fuzzy_replace(self, content: str, search_content: str, replace_content: str) -> Dict:
-        """Perform fuzzy matching and replacement"""
+        """Perform fuzzy matching and replacement with space normalization"""
         lines = content.split('\n')
         search_lines = search_content.strip().split('\n')
         
@@ -1177,14 +1310,24 @@ lazy val root = (project in file("."))
         best_match_start = -1
         best_match_end = -1
         
+        # Normalize search content for comparison
+        normalized_search = self._normalize_spaces_for_matching(search_content.strip())
+        
         # Try to find a contiguous block that best matches the search content
         for start_idx in range(len(lines) - len(search_lines) + 1):
             end_idx = start_idx + len(search_lines)
             candidate_lines = lines[start_idx:end_idx]
             candidate_text = '\n'.join(candidate_lines)
             
-            # Calculate similarity ratio
-            ratio = difflib.SequenceMatcher(None, search_content.strip(), candidate_text.strip()).ratio()
+            # Calculate similarity ratio using both original and normalized content
+            original_ratio = difflib.SequenceMatcher(None, search_content.strip(), candidate_text.strip()).ratio()
+            
+            # Also calculate normalized ratio for better space-insensitive matching
+            normalized_candidate = self._normalize_spaces_for_matching(candidate_text.strip())
+            normalized_ratio = difflib.SequenceMatcher(None, normalized_search, normalized_candidate).ratio()
+            
+            # Use the higher ratio for better matching
+            ratio = max(original_ratio, normalized_ratio)
             
             if ratio > best_match_ratio:
                 best_match_ratio = ratio
@@ -1193,9 +1336,13 @@ lazy val root = (project in file("."))
         
         # If we found a good enough match (>70% similar), replace it
         if best_match_ratio > 0.7:
+            # Preserve indentation from the matched content
+            matched_content = '\n'.join(lines[best_match_start:best_match_end])
+            indentation_preserved_replacement = self._preserve_indentation_in_replacement(matched_content, replace_content)
+            
             new_lines = (
                 lines[:best_match_start] +
-                replace_content.split('\n') +
+                indentation_preserved_replacement.split('\n') +
                 lines[best_match_end:]
             )
             return {

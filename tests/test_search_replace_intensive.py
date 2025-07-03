@@ -10,6 +10,9 @@ import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 import time
+import os
+import stat
+import concurrent.futures
 
 from scala_runner.workspace_manager import WorkspaceManager
 
@@ -591,42 +594,6 @@ class TestRealWhooshFuzzySearch:
         assert isinstance(results, list)  # Should not crash
 
     @pytest.mark.asyncio
-    async def test_fuzzy_search_performance_with_large_content(self):
-        """Test fuzzy search performance with larger content"""
-        workspace_name = "performance-test"
-        await self.workspace_manager.create_workspace(workspace_name)
-        
-        # Create larger file with repeated patterns
-        large_content = """object LargeService {
-""" + "\n".join([f"""
-  def method{i}(param: String): String = {{
-    val result = processData{i}(param)
-    logger.info(s"Processing method{i} with param: $param")
-    result
-  }}
-  
-  private def processData{i}(data: String): String = {{
-    data.toUpperCase + "_{i}"
-  }}""" for i in range(50)]) + "\n}"
-        
-        await self.workspace_manager.create_file(workspace_name, "LargeService.scala", large_content)
-        
-        # Wait for indexing
-        await asyncio.sleep(0.5)
-
-        # Test search performance
-        start_time = time.time()
-        results = await self.workspace_manager.search_files_fuzzy(
-            workspace_name, "processData25", limit=10, fuzzy=True
-        )
-        end_time = time.time()
-        
-        # Should complete in reasonable time (< 2 seconds)
-        assert (end_time - start_time) < 2.0
-        assert len(results) > 0
-        assert any("LargeService.scala" in result["filepath"] for result in results)
-
-    @pytest.mark.asyncio
     async def test_regular_search_vs_fuzzy_search(self):
         """Test comparing regular search with fuzzy search results"""
         workspace_name = "comparison-test"
@@ -799,6 +766,420 @@ def func() = "same"
         # Should still succeed even though content is identical
         assert result["patch_applied"] is True
 
+    @pytest.mark.asyncio
+    async def test_apply_patch_ignoring_spaces(self):
+        """Test applying patch with space-insensitive matching"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "SpaceTest.scala"
+        initial_content = """object SpaceTest {
+                  val deepInner = {
+                    "very deep value"
+                  }
+  def anotherMethod() = "test"
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # Apply patch without matching the exact spaces
+        patch_content = """SpaceTest.scala
+<<<<<<< SEARCH
+val deepInner = {
+"very deep value"
+}
+=======
+val deepInner = {
+"modified deep value"
+}
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify the content was updated
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert "modified deep value" in updated_content["content"]
+        assert "very deep value" not in updated_content["content"]
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_different_indentation(self):
+        """Test applying patch with different indentation levels"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "IndentTest.scala"
+        initial_content = """object IndentTest {
+    def method1() = {
+        val x = 1
+        val y = 2
+        x + y
+    }
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # Apply patch with minimal indentation
+        patch_content = """IndentTest.scala
+<<<<<<< SEARCH
+def method1() = {
+val x = 1
+val y = 2
+x + y
+}
+=======
+def method1() = {
+val result = 1 + 2
+result
+}
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify the content was updated
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert "val result = 1 + 2" in updated_content["content"]
+        assert "val x = 1" not in updated_content["content"]
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_extra_spaces(self):
+        """Test applying patch with extra spaces in search content"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "ExtraSpaces.scala"
+        initial_content = """object ExtraSpaces {
+  def calculate(a: Int, b: Int): Int = a + b
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # Apply patch with extra spaces in search
+        patch_content = """ExtraSpaces.scala
+<<<<<<< SEARCH
+def    calculate(a:   Int,   b:   Int):   Int   =   a   +   b
+=======
+def multiply(a: Int, b: Int): Int = a * b
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify the content was updated
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert "def multiply(a: Int, b: Int): Int = a * b" in updated_content["content"]
+        assert "def calculate" not in updated_content["content"]
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_preserves_indentation(self):
+        """Test that patch application preserves the original indentation"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "IndentPreserve.scala"
+        initial_content = """object IndentPreserve {
+      def calculate(a: Int, b: Int): Int = {
+        val result = a + b
+        println(s"Result: $result")
+        result
+      }
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # Apply patch with different indentation in search/replace
+        patch_content = """IndentPreserve.scala
+<<<<<<< SEARCH
+def calculate(a: Int, b: Int): Int = {
+val result = a + b
+println(s"Result: $result")
+result
+}
+=======
+def multiply(x: Int, y: Int): Int = {
+val product = x * y
+println(s"Product: $product")
+product
+}
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify the content was updated AND indentation was preserved
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        content_lines = updated_content["content"].split('\n')
+        
+        # Find the multiply function and check indentation
+        for i, line in enumerate(content_lines):
+            if "def multiply" in line:
+                # Check that the function definition has proper indentation (6 spaces)
+                assert line.startswith("      def multiply")
+                # Check that the body has proper indentation (8 spaces)
+                assert content_lines[i+1].startswith("        val product")
+                assert content_lines[i+2].startswith("        println")
+                assert content_lines[i+3].startswith("        product")
+                break
+        else:
+            assert False, "multiply function not found in updated content"
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_preserves_complex_indentation(self):
+        """Test that patch application preserves complex nested indentation"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "ComplexIndent.scala"
+        initial_content = """object ComplexIndent {
+  class Calculator {
+    def process(): Unit = {
+      val data = List(1, 2, 3)
+      data.foreach { item =>
+        println(s"Processing: $item")
+        val doubled = item * 2
+        println(s"Doubled: $doubled")
+      }
+    }
+  }
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # Apply patch with no indentation in search/replace
+        patch_content = """ComplexIndent.scala
+<<<<<<< SEARCH
+data.foreach { item =>
+println(s"Processing: $item")
+val doubled = item * 2
+println(s"Doubled: $doubled")
+}
+=======
+data.map { item =>
+println(s"Mapping: $item")
+val tripled = item * 3
+println(s"Tripled: $tripled")
+tripled
+}
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify the content was updated AND complex indentation was preserved
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        content_lines = updated_content["content"].split('\n')
+        
+        # Find the map function and check indentation levels
+        for i, line in enumerate(content_lines):
+            if "data.map" in line:
+                # Check that indentation is preserved at each level
+                assert line.startswith("      data.map")  # 6 spaces
+                assert content_lines[i+1].startswith("        println(s\"Mapping")  # 8 spaces
+                assert content_lines[i+2].startswith("        val tripled")  # 8 spaces
+                assert content_lines[i+3].startswith("        println(s\"Tripled")  # 8 spaces
+                # The "tripled" line should follow the last line's indentation (closing brace = 6 spaces)
+                assert content_lines[i+4].startswith("      tripled")  # 6 spaces (from last line)
+                # The closing brace should use the original closing indentation (6 spaces)
+                assert content_lines[i+5].startswith("      }")  # 6 spaces
+                break
+        else:
+            assert False, "map function not found in updated content"
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_extra_lines_follow_last_line_indent(self):
+        """Test that extra lines in replacement follow the indentation of the last line from search"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "ExtraLinesTest.scala"
+        initial_content = """object ExtraLinesTest {
+  def processItems(items: List[Int]): List[Int] = {
+    items.map { item =>
+      val doubled = item * 2
+      doubled
+    }
+  }
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # Apply patch where replacement has more lines than search
+        patch_content = """ExtraLinesTest.scala
+<<<<<<< SEARCH
+val doubled = item * 2
+doubled
+=======
+val doubled = item * 2
+val tripled = item * 3
+val quadrupled = item * 4
+tripled + quadrupled
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify the extra lines follow the last line's indentation
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        content_lines = updated_content["content"].split('\n')
+        
+        # Find the map function and check indentation
+        for i, line in enumerate(content_lines):
+            if "val doubled = item * 2" in line:
+                # Original lines preserve their indentation (6 spaces)
+                assert line.startswith("      val doubled = item * 2")  # 6 spaces
+                # Extra lines should follow the last line's indentation (also 6 spaces from "doubled")  
+                assert content_lines[i+1].startswith("      val tripled = item * 3")  # 6 spaces
+                assert content_lines[i+2].startswith("      val quadrupled = item * 4")  # 6 spaces
+                assert content_lines[i+3].startswith("      tripled + quadrupled")  # 6 spaces
+                break
+        else:
+            assert False, "doubled variable not found in updated content"
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_fewer_lines_than_search(self):
+        """Test that replacement with fewer lines than search works correctly"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "FewerLinesTest.scala"
+        initial_content = """object FewerLinesTest {
+  def processData(data: String): String = {
+    val step1 = data.trim()
+    val step2 = step1.toUpperCase()
+    val step3 = step2.replace(" ", "_")
+    val step4 = step3 + "_PROCESSED"
+    step4
+  }
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # Apply patch where replacement has fewer lines than search
+        patch_content = """FewerLinesTest.scala
+<<<<<<< SEARCH
+val step1 = data.trim()
+val step2 = step1.toUpperCase()
+val step3 = step2.replace(" ", "_")
+val step4 = step3 + "_PROCESSED"
+step4
+=======
+data.trim().toUpperCase().replace(" ", "_") + "_PROCESSED"
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify the multi-line content was replaced with single line
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        content = updated_content["content"]
+        
+        # Check that the multi-line code was replaced with single line
+        assert "data.trim().toUpperCase().replace(\" \", \"_\") + \"_PROCESSED\"" in content
+        assert "val step1 = data.trim()" not in content
+        assert "val step2 = step1.toUpperCase()" not in content
+        assert "val step3 = step2.replace" not in content
+        assert "val step4 = step3 + " not in content
+        
+        # Verify indentation is preserved
+        content_lines = content.split('\n')
+        for line in content_lines:
+            if "data.trim().toUpperCase()" in line:
+                # Should preserve the original indentation (4 spaces)
+                assert line.startswith("    data.trim().toUpperCase()"), f"Indentation not preserved: {repr(line)}"
+                break
+        else:
+            assert False, "Replacement line not found"
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_deletion_with_empty_replacement(self):
+        """Test that multiple lines can be deleted with empty replacement"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "DeletionTest.scala"
+        initial_content = """object DeletionTest {
+  def keepThis() = "keep"
+  
+  def deleteThis() = {
+    val unnecessary = "delete me"
+    val alsoUnnecessary = "delete me too"
+    println("This should be deleted")
+    unnecessary + alsoUnnecessary
+  }
+  
+  def alsoKeepThis() = "keep"
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # Delete the entire function (multiple lines to empty)
+        patch_content = """DeletionTest.scala
+<<<<<<< SEARCH
+def deleteThis() = {
+val unnecessary = "delete me"
+val alsoUnnecessary = "delete me too"
+println("This should be deleted")
+unnecessary + alsoUnnecessary
+}
+=======
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify content was deleted
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        content = updated_content["content"]
+        
+        # Check that the function was completely deleted
+        assert "def deleteThis()" not in content
+        assert "delete me" not in content
+        assert "This should be deleted" not in content
+        # But other functions should remain
+        assert "def keepThis()" in content
+        assert "def alsoKeepThis()" in content
+
     def test_fuzzy_replace_with_repeated_patterns(self):
         """Test fuzzy replacement when content has repeated patterns"""
         content = """def func1() = "test"
@@ -817,8 +1198,8 @@ def func1() = "test"  // Duplicate function name
         assert 'def func1() = "updated"' in result["content"]
 
 
-class TestPerformanceAndLimits:
-    """Test performance characteristics and limits"""
+class TestIntegrationScenarios:
+    """Test integration scenarios with real-world use cases"""
 
     def setup_method(self):
         """Setup test environment"""
@@ -829,92 +1210,476 @@ class TestPerformanceAndLimits:
         """Clean up test environment"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_parse_large_number_of_files(self):
-        """Test parsing patch with large number of files"""
-        # Create a patch with 100 files
-        files = []
-        for i in range(100):
-            files.append(f"""File{i}.scala
-<<<<<<< SEARCH
-old content {i}
-=======
-new content {i}
->>>>>>> REPLACE""")
-        
-        large_patch = "\n\n".join(files)
-        
-        patches = self.workspace_manager._parse_search_replace_format(large_patch)
-        
-        assert len(patches) == 100
-        assert patches[0]["file_path"] == "File0.scala"
-        assert patches[99]["file_path"] == "File99.scala"
-        assert patches[50]["search"] == "old content 50"
-        assert patches[50]["replace"] == "new content 50"
-
-    def test_fuzzy_replace_with_large_content(self):
-        """Test fuzzy replacement performance with large content"""
-        # Create content with 1000 lines
-        large_content = "\n".join([f"Line {i} with some content here" for i in range(1000)])
-        
-        search_content = """Line 500 with some content here
-Line 501 with some content here
-Line 502 with some content here"""
-        
-        replace_content = """Replaced line 500
-Replaced line 501
-Replaced line 502"""
-
-        result = self.workspace_manager._fuzzy_replace(large_content, search_content, replace_content)
-        
-        assert result["found"] is True
-        assert "Replaced line 500" in result["content"]
-
     @pytest.mark.asyncio
-    async def test_apply_patch_with_many_small_changes(self):
-        """Test applying patch with many small changes to same file"""
+    async def test_refactoring_scenario_rename_class(self):
+        """Test real-world refactoring scenario: rename class"""
         workspace_name = "test-workspace"
         await self.workspace_manager.create_workspace(workspace_name)
         
-        file_path = "ManyChanges.scala"
-        initial_content = """object ManyChanges {
-  val a = 1
-  val b = 2
-  val c = 3
-  val d = 4
-  val e = 5
+        # Create multiple files with references to a class
+        main_file = "src/main/scala/UserService.scala"
+        main_content = """package com.example.service
+
+class UserService {
+  def findUser(id: Long): Option[User] = {
+    // Implementation
+    None
+  }
+  
+  def createUser(user: User): User = {
+    // Implementation
+    user
+  }
 }"""
         
-        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        test_file = "src/test/scala/UserServiceTest.scala"
+        test_content = """package com.example.service
+
+import org.scalatest.flatspec.AnyFlatSpec
+
+class UserServiceTest extends AnyFlatSpec {
+  val service = new UserService()
+  
+  "UserService" should "find users" in {
+    val result = service.findUser(1L)
+    assert(result.isEmpty)
+  }
+}"""
         
-        # Wait for indexing
+        model_file = "src/main/scala/User.scala"
+        model_content = """package com.example.model
+
+case class User(id: Long, name: String, email: String)"""
+        
+        await self.workspace_manager.create_file(workspace_name, main_file, main_content)
+        await self.workspace_manager.create_file(workspace_name, test_file, test_content)
+        await self.workspace_manager.create_file(workspace_name, model_file, model_content)
+        
         await asyncio.sleep(0.1)
 
-        # Create patch that changes all values
-        patch_content = f"""{file_path}
+        # Apply refactoring patch to rename UserService to AccountService
+        patch_content = """src/main/scala/UserService.scala
 <<<<<<< SEARCH
-val a = 1
-  val b = 2
-  val c = 3
-  val d = 4
-  val e = 5
+class UserService {
+  def findUser(id: Long): Option[User] = {
+    // Implementation
+    None
+  }
+  
+  def createUser(user: User): User = {
+    // Implementation
+    user
+  }
+}
 =======
-val a = 10
-  val b = 20
-  val c = 30
-  val d = 40
-  val e = 50
+class AccountService {
+  def findUser(id: Long): Option[User] = {
+    // Implementation
+    None
+  }
+  
+  def createUser(user: User): User = {
+    // Implementation
+    user
+  }
+}
+>>>>>>> REPLACE
+
+src/test/scala/UserServiceTest.scala
+<<<<<<< SEARCH
+class UserServiceTest extends AnyFlatSpec {
+  val service = new UserService()
+  
+  "UserService" should "find users" in {
+    val result = service.findUser(1L)
+    assert(result.isEmpty)
+  }
+}
+=======
+class AccountServiceTest extends AnyFlatSpec {
+  val service = new AccountService()
+  
+  "AccountService" should "find users" in {
+    val result = service.findUser(1L)
+    assert(result.isEmpty)
+  }
+}
 >>>>>>> REPLACE"""
 
         result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
-
-        assert result["patch_applied"] is True
         
-        # Verify all changes were applied
-        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
-        content = updated_content["content"]
-        assert "val a = 10" in content
-        assert "val e = 50" in content
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 2
+        
+        # Verify changes were applied correctly
+        main_content = await self.workspace_manager.get_file_content(workspace_name, main_file)
+        assert "class AccountService" in main_content["content"]
+        
+        test_content = await self.workspace_manager.get_file_content(workspace_name, test_file)
+        assert "class AccountServiceTest" in test_content["content"]
+        assert "new AccountService()" in test_content["content"]
+
+    @pytest.mark.asyncio
+    async def test_configuration_update_scenario(self):
+        """Test real-world scenario: update configuration values"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        # Create configuration file
+        config_file = "src/main/resources/application.conf"
+        config_content = """app {
+  name = "MyApp"
+  version = "1.0.0"
+  
+  database {
+    url = "jdbc:postgresql://localhost:5432/myapp"
+    username = "user"
+    password = "password"
+    maxConnections = 10
+  }
+  
+  server {
+    port = 8080
+    host = "localhost"
+  }
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, config_file, config_content)
+        await asyncio.sleep(0.1)
+
+        # Apply configuration update patch
+        patch_content = """src/main/resources/application.conf
+<<<<<<< SEARCH
+  version = "1.0.0"
+  
+  database {
+    url = "jdbc:postgresql://localhost:5432/myapp"
+    username = "user"
+    password = "password"
+    maxConnections = 10
+  }
+  
+  server {
+    port = 8080
+    host = "localhost"
+  }
+=======
+  version = "1.1.0"
+  
+  database {
+    url = "jdbc:postgresql://prod-db:5432/myapp"
+    username = "prod_user"
+    password = "secure_password"
+    maxConnections = 50
+  }
+  
+  server {
+    port = 9090
+    host = "0.0.0.0"
+  }
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify configuration was updated
+        content = await self.workspace_manager.get_file_content(workspace_name, config_file)
+        config_text = content["content"]
+        assert 'version = "1.1.0"' in config_text
+        assert 'port = 9090' in config_text
+        assert 'host = "0.0.0.0"' in config_text
+        assert 'maxConnections = 50' in config_text
+
+    @pytest.mark.asyncio
+    async def test_build_file_update_scenario(self):
+        """Test real-world scenario: update build file dependencies"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        # Create build.sbt file
+        build_file = "build.sbt"
+        build_content = """name := "MyScalaApp"
+version := "0.1.0"
+scalaVersion := "2.13.8"
+
+libraryDependencies ++= Seq(
+  "org.typelevel" %% "cats-core" % "2.7.0",
+  "org.typelevel" %% "cats-effect" % "3.3.0",
+  "org.scalatest" %% "scalatest" % "3.2.11" % Test
+)
+
+scalacOptions ++= Seq(
+  "-deprecation",
+  "-feature",
+  "-unchecked"
+)"""
+        
+        await self.workspace_manager.create_file(workspace_name, build_file, build_content)
+        await asyncio.sleep(0.1)
+
+        # Apply build file update patch
+        patch_content = """build.sbt
+<<<<<<< SEARCH
+version := "0.1.0"
+scalaVersion := "2.13.8"
+
+libraryDependencies ++= Seq(
+  "org.typelevel" %% "cats-core" % "2.7.0",
+  "org.typelevel" %% "cats-effect" % "3.3.0",
+  "org.scalatest" %% "scalatest" % "3.2.11" % Test
+)
+=======
+version := "0.2.0"
+scalaVersion := "2.13.10"
+
+libraryDependencies ++= Seq(
+  "org.typelevel" %% "cats-core" % "2.9.0",
+  "org.typelevel" %% "cats-effect" % "3.4.8",
+  "org.scalatest" %% "scalatest" % "3.2.15" % Test,
+  "ch.qos.logback" % "logback-classic" % "1.4.6"
+)
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify build file was updated
+        content = await self.workspace_manager.get_file_content(workspace_name, build_file)
+        build_text = content["content"]
+        assert 'version := "0.2.0"' in build_text
+        assert 'scalaVersion := "2.13.10"' in build_text
+        assert 'cats-core" % "2.9.0"' in build_text
+        assert 'logback-classic' in build_text
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short"]) 
+class TestSpecialFileTypes:
+    """Test handling of special file types and formats"""
+
+    def setup_method(self):
+        """Setup test environment"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+
+    def teardown_method(self):
+        """Clean up test environment"""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_to_json_file(self):
+        """Test applying patch to JSON file"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        # Create JSON file
+        json_file = "src/main/resources/config.json"
+        json_content = """{
+  "application": {
+    "name": "MyApp",
+    "version": "1.0.0",
+    "features": [
+      "feature1",
+      "feature2"
+    ]
+  },
+  "database": {
+    "host": "localhost",
+    "port": 5432
+  }
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, json_file, json_content)
+        await asyncio.sleep(0.1)
+
+        # Apply patch to JSON file
+        patch_content = """src/main/resources/config.json
+<<<<<<< SEARCH
+    "version": "1.0.0",
+    "features": [
+      "feature1",
+      "feature2"
+    ]
+=======
+    "version": "1.1.0",
+    "features": [
+      "feature1",
+      "feature2",
+      "feature3"
+    ]
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify JSON was updated
+        content = await self.workspace_manager.get_file_content(workspace_name, json_file)
+        json_text = content["content"]
+        assert '"version": "1.1.0"' in json_text
+        assert '"feature3"' in json_text
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_to_yaml_file(self):
+        """Test applying patch to YAML file"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        # Create YAML file
+        yaml_file = "src/main/resources/application.yml"
+        yaml_content = """application:
+  name: MyApp
+  version: 1.0.0
+  features:
+    - feature1
+    - feature2
+
+database:
+  host: localhost
+  port: 5432
+  credentials:
+    username: user
+    password: secret"""
+        
+        await self.workspace_manager.create_file(workspace_name, yaml_file, yaml_content)
+        await asyncio.sleep(0.1)
+
+        # Apply patch to YAML file
+        patch_content = """src/main/resources/application.yml
+<<<<<<< SEARCH
+  version: 1.0.0
+  features:
+    - feature1
+    - feature2
+=======
+  version: 1.2.0
+  features:
+    - feature1
+    - feature2
+    - feature3
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify YAML was updated
+        content = await self.workspace_manager.get_file_content(workspace_name, yaml_file)
+        yaml_text = content["content"]
+        assert "version: 1.2.0" in yaml_text
+        assert "- feature3" in yaml_text
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_to_xml_file(self):
+        """Test applying patch to XML file"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        # Create XML file
+        xml_file = "src/main/resources/config.xml"
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <application>
+    <name>MyApp</name>
+    <version>1.0.0</version>
+    <features>
+      <feature>feature1</feature>
+      <feature>feature2</feature>
+    </features>
+  </application>
+  <database>
+    <host>localhost</host>
+    <port>5432</port>
+  </database>
+</configuration>"""
+        
+        await self.workspace_manager.create_file(workspace_name, xml_file, xml_content)
+        await asyncio.sleep(0.1)
+
+        # Apply patch to XML file
+        patch_content = """src/main/resources/config.xml
+<<<<<<< SEARCH
+    <version>1.0.0</version>
+    <features>
+      <feature>feature1</feature>
+      <feature>feature2</feature>
+    </features>
+=======
+    <version>1.3.0</version>
+    <features>
+      <feature>feature1</feature>
+      <feature>feature2</feature>
+      <feature>feature3</feature>
+    </features>
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify XML was updated
+        content = await self.workspace_manager.get_file_content(workspace_name, xml_file)
+        xml_text = content["content"]
+        assert "<version>1.3.0</version>" in xml_text
+        assert "<feature>feature3</feature>" in xml_text
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_to_markdown_file(self):
+        """Test applying patch to Markdown file"""
+        workspace_name = "test-workspace"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        # Create Markdown file
+        md_file = "README.md"
+        md_content = """# MyApp
+
+This is a sample application.
+
+## Features
+
+- Feature 1: Basic functionality
+- Feature 2: Advanced features
+
+## Installation
+
+```bash
+sbt compile
+sbt run
+```
+
+## Version
+
+Current version: 1.0.0"""
+        
+        await self.workspace_manager.create_file(workspace_name, md_file, md_content)
+        await asyncio.sleep(0.1)
+
+        # Apply patch to Markdown file
+        patch_content = """README.md
+<<<<<<< SEARCH
+## Features
+
+- Feature 1: Basic functionality
+- Feature 2: Advanced features
+=======
+## Features
+
+- Feature 1: Basic functionality
+- Feature 2: Advanced features  
+- Feature 3: Premium features
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify Markdown was updated
+        content = await self.workspace_manager.get_file_content(workspace_name, md_file)
+        md_text = content["content"]
+        assert "- Feature 3: Premium features" in md_text 

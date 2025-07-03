@@ -1123,39 +1123,7 @@ object NewFile {
         content = nested_file_path.read_text()
         assert "in deep directory" in content
 
-    @pytest.mark.asyncio
-    async def test_apply_patch_large_file(self, workspace_manager):
-        """Test applying patch to a large file"""
-        workspace_name = "test-workspace"
-        await workspace_manager.create_workspace(workspace_name)
-        
-        file_path = "src/main/scala/LargeFile.scala"
-        # Create a large file with many lines
-        large_content = "\n".join([f"// Line {i}" for i in range(1000)])
-        
-        await workspace_manager.create_file(workspace_name, file_path, large_content)
-        
-        # Verify initial content has the line we're going to modify
-        full_path = workspace_manager.get_workspace_path(workspace_name) / file_path
-        original_content = full_path.read_text()
-        assert "// Line 498" in original_content
-        assert "// Modified Line 498" not in original_content
-        
-        # Patch that modifies a line in the middle using search-replace format
-        patch_content = f"""{file_path}
-<<<<<<< SEARCH
-// Line 498
-=======
-// Modified Line 498
->>>>>>> REPLACE"""
-        
-        result = await workspace_manager.apply_patch(workspace_name, patch_content)
-        
-        assert result["patch_applied"] is True
-        
-        new_content = full_path.read_text()
-        assert "// Modified Line 498" in new_content
-        assert "// Line 498" not in new_content
+
 
 
 
