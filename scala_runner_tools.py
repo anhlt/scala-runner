@@ -1188,28 +1188,7 @@ class Tools:
         except Exception as e:
             return {"error": f"Network error: {str(e)}"}
 
-    async def get_index_status(self, workspace_name: str) -> Dict:
-        """
-        Get indexing status for a workspace
-        
-        Args:
-            workspace_name: Name of the workspace
-            
-        Returns:
-            Dict with index status information
-        """
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspace/{workspace_name}/index/status",
-                    timeout=30.0
-                )
-                if response.status_code == 200:
-                    return response.json().get("data", {})
-                else:
-                    return {"error": f"HTTP {response.status_code}: {response.text}"}
-        except Exception as e:
-            return {"error": f"Network error: {str(e)}"}
+
 
     async def sync_index_with_filesystem(self, workspace_name: str) -> Dict:
         """
@@ -1234,47 +1213,5 @@ class Tools:
         except Exception as e:
             return {"error": f"Network error: {str(e)}"}
 
-    async def wait_for_index_ready(self, workspace_name: str, timeout: int = 10) -> Dict:
-        """
-        Wait for index to be ready and up-to-date
-        
-        Args:
-            workspace_name: Name of the workspace
-            timeout: Maximum time to wait in seconds
-            
-        Returns:
-            Dict with readiness status
-        """
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspace/{workspace_name}/index/wait-ready",
-                    params={"timeout": timeout},
-                    timeout=float(timeout + 5)  # Add buffer for network
-                )
-                if response.status_code == 200:
-                    return response.json().get("data", {})
-                else:
-                    return {"error": f"HTTP {response.status_code}: {response.text}"}
-        except Exception as e:
-            return {"error": f"Network error: {str(e)}"}
 
-    async def get_index_queue_status(self) -> Dict:
-        """
-        Get status of the indexing queue
-        
-        Returns:
-            Dict with queue status information
-        """
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/workspace/any/index/queue-status",
-                    timeout=10.0
-                )
-                if response.status_code == 200:
-                    return response.json().get("data", {})
-                else:
-                    return {"error": f"HTTP {response.status_code}: {response.text}"}
-        except Exception as e:
-            return {"error": f"Network error: {str(e)}"} 
+ 
