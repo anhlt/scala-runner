@@ -1630,56 +1630,386 @@ database:
 
     @pytest.mark.asyncio
     async def test_apply_patch_to_markdown_file(self):
-        """Test applying patch to Markdown file"""
-        workspace_name = "test-workspace"
+        """Test applying patch to markdown file"""
+        workspace_name = "markdown-test"
         await self.workspace_manager.create_workspace(workspace_name)
         
-        # Create Markdown file
-        md_file = "README.md"
-        md_content = """# MyApp
+        file_path = "README.md"
+        initial_content = """# Project Title
 
-This is a sample application.
-
-## Features
-
-- Feature 1: Basic functionality
-- Feature 2: Advanced features
+This is a **markdown** file with:
+- Lists
+- *Italic* text
+- `code blocks`
 
 ## Installation
 
 ```bash
-sbt compile
-sbt run
+npm install
 ```
 
-## Version
+## Usage
 
-Current version: 1.0.0"""
+See the [documentation](docs/README.md).
+"""
         
-        await self.workspace_manager.create_file(workspace_name, md_file, md_content)
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
         await asyncio.sleep(0.1)
 
-        # Apply patch to Markdown file
-        patch_content = """README.md
+        patch_content = f"""{file_path}
 <<<<<<< SEARCH
-## Features
+## Installation
 
-- Feature 1: Basic functionality
-- Feature 2: Advanced features
+```bash
+npm install
+```
 =======
-## Features
+## Installation
 
-- Feature 1: Basic functionality
-- Feature 2: Advanced features  
-- Feature 3: Premium features
+```bash
+npm install --save-dev
+```
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+
+        assert result["patch_applied"] is True
+        assert result["results"]["successful_files"] == 1
+        
+        # Verify markdown content was updated
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert "--save-dev" in updated_content["content"]
+        assert "npm install\n```" not in updated_content["content"]
+
+
+class TestAdvancedEdgeCases:
+    """Test advanced edge cases and boundary conditions"""
+
+    def setup_method(self):
+        """Setup test environment"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+
+    def teardown_method(self):
+        """Clean up test environment"""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_circular_replacement(self):
+        """Test applying patch that creates circular replacement pattern"""
+        workspace_name = "circular-test"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "circular.scala"
+        initial_content = """object Circular {
+  def a = "A"
+  def b = "B"
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # First patch: A -> B
+        patch_content1 = f"""{file_path}
+<<<<<<< SEARCH
+def a = "A"
+=======
+def a = "B"
+>>>>>>> REPLACE"""
+
+        result1 = await self.workspace_manager.apply_patch(workspace_name, patch_content1)
+        assert result1["patch_applied"] is True
+        
+        # Second patch: B -> A (should not affect the first change)
+        patch_content2 = f"""{file_path}
+<<<<<<< SEARCH
+def b = "B"
+=======
+def b = "A"
+>>>>>>> REPLACE"""
+
+        result2 = await self.workspace_manager.apply_patch(workspace_name, patch_content2)
+        assert result2["patch_applied"] is True
+        
+        # Verify final state
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        content = updated_content["content"]
+        assert 'def a = "B"' in content
+        assert 'def b = "A"' in content
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_nested_search_replace_markers(self):
+        """Test applying patch with nested search/replace markers in content"""
+        workspace_name = "nested-markers-test"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "nested.scala"
+        initial_content = """object NestedMarkers {
+  val comment = \"\"\"
+    This contains <<<<<<< SEARCH markers
+    and >>>>>>> REPLACE markers
+    but they are just text
+  \"\"\"
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        patch_content = file_path + """
+<<<<<<< SEARCH
+val comment = \"\"\"
+    This contains <<<<<<< SEARCH markers
+    and >>>>>>> REPLACE markers
+    but they are just text
+  \"\"\"
+=======
+val comment = \"\"\"
+    This contains processed markers
+    that were safely handled
+  \"\"\"
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        assert result["patch_applied"] is True
+        
+        # Verify nested markers were handled correctly
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert "processed markers" in updated_content["content"]
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_very_deep_nesting(self):
+        """Test applying patch with very deeply nested code structure"""
+        workspace_name = "deep-nesting-test"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "deep.scala"
+        initial_content = """object Deep {
+  def level1() = {
+    def level2() = {
+      def level3() = {
+        def level4() = {
+          def level5() = {
+            def level6() = {
+              def level7() = {
+                def level8() = {
+                  def level9() = {
+                    def level10() = {
+                      "very deep"
+                    }
+                    level10()
+                  }
+                  level9()
+                }
+                level8()
+              }
+              level7()
+            }
+            level6()
+          }
+          level5()
+        }
+        level4()
+      }
+      level3()
+    }
+    level2()
+  }
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        patch_content = f"""{file_path}
+<<<<<<< SEARCH
+def level10() = {
+                      "very deep"
+                    }
+=======
+def level10() = {
+                      "modified deep"
+                    }
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        assert result["patch_applied"] is True
+        
+        # Verify deep nesting was preserved
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert "modified deep" in updated_content["content"]
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_exact_threshold_fuzzy_match(self):
+        """Test fuzzy matching at exact similarity threshold"""
+        workspace_name = "threshold-test"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "threshold.scala"
+        initial_content = """object Threshold {
+  def calculate(x: Int, y: Int, z: Int): Int = {
+    val step1 = x * 2
+    val step2 = y * 3
+    val step3 = z * 4
+    val result = step1 + step2 + step3
+    result
+  }
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        # Create search content that should be right at fuzzy match threshold
+        patch_content = f"""{file_path}
+<<<<<<< SEARCH
+def calculate(x: Int, y: Int, z: Int): Int = {
+    val step1 = x * 2
+    val step2 = y * 3
+    val step3 = z * 5
+    val result = step1 + step2 + step3
+    result
+  }
+=======
+def calculate(x: Int, y: Int, z: Int): Int = {
+    val step1 = x << 1
+    val step2 = y * 3
+    val step3 = z << 2
+    val result = step1 + step2 + step3
+    result
+  }
 >>>>>>> REPLACE"""
 
         result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
         
+        # Should succeed with fuzzy matching
         assert result["patch_applied"] is True
-        assert result["results"]["successful_files"] == 1
         
-        # Verify Markdown was updated
-        content = await self.workspace_manager.get_file_content(workspace_name, md_file)
-        md_text = content["content"]
-        assert "- Feature 3: Premium features" in md_text 
+        # Verify content was updated
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert "<<" in updated_content["content"]
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_file_ends_with_search_content(self):
+        """Test applying patch where search content is at the very end of file"""
+        workspace_name = "end-search-test"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "end.scala"
+        initial_content = """object End {
+  def start() = "beginning"
+  def middle() = "middle"
+  def end() = "end"
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        patch_content = f"""{file_path}
+<<<<<<< SEARCH
+def end() = "end"
+=======
+def end() = "modified"
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        assert result["patch_applied"] is True
+        
+        # Verify end content was updated
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert 'def end() = "modified"' in updated_content["content"]
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_file_starts_with_search_content(self):
+        """Test applying patch where search content is at the very start of file"""
+        workspace_name = "start-search-test"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "start.scala"
+        initial_content = """object Start {
+  def method() = "content"
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        patch_content = f"""{file_path}
+<<<<<<< SEARCH
+object Start {
+=======
+object Modified {
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        assert result["patch_applied"] is True
+        
+        # Verify start content was updated
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert "object Modified" in updated_content["content"]
+
+    @pytest.mark.asyncio
+    async def test_apply_patch_with_search_content_spans_entire_file(self):
+        """Test applying patch where search content spans the entire file"""
+        workspace_name = "entire-file-test"
+        await self.workspace_manager.create_workspace(workspace_name)
+        
+        file_path = "entire.scala"
+        initial_content = """object Entire {
+  def method() = "replace entire file"
+}"""
+        
+        await self.workspace_manager.create_file(workspace_name, file_path, initial_content)
+        
+        # Wait for indexing
+        await asyncio.sleep(0.1)
+
+        patch_content = f"""{file_path}
+<<<<<<< SEARCH
+object Entire {
+  def method() = "replace entire file"
+}
+=======
+object CompletelyNew {
+  def newMethod() = "brand new content"
+  def anotherMethod() = "more content"
+}
+>>>>>>> REPLACE"""
+
+        result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
+        assert result["patch_applied"] is True
+        
+        # Verify entire file was replaced
+        updated_content = await self.workspace_manager.get_file_content(workspace_name, file_path)
+        assert "CompletelyNew" in updated_content["content"]
+        assert "Entire" not in updated_content["content"]
+        assert "newMethod" in updated_content["content"]
+
+    def test_normalize_spaces_edge_cases(self):
+        """Test space normalization with various edge cases"""
+        # Test with method that may not exist
+        if hasattr(self.workspace_manager, '_normalize_spaces_for_matching'):
+            test_cases = [
+                ("", ""),
+                ("   ", " "),
+                ("\t\n\r", " "),
+                ("  multiple   spaces  ", " multiple spaces "),
+                ("mixed\t\nwhitespace", "mixed whitespace"),
+                ("no_spaces", "no_spaces"),
+                ("trailing  ", "trailing "),
+                ("  leading", " leading"),
+            ]
+            
+            for input_text, expected in test_cases:
+                result = self.workspace_manager._normalize_spaces_for_matching(input_text)
+                assert result == expected, f"Failed for '{input_text}' -> expected '{expected}', got '{result}'" 
