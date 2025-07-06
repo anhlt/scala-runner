@@ -13,6 +13,7 @@ import time
 import os
 import stat
 import concurrent.futures
+import uuid
 
 from scala_runner.workspace_manager import WorkspaceManager
 
@@ -24,10 +25,15 @@ class TestSearchReplacePatchParsing:
         """Setup test environment"""
         self.temp_dir = tempfile.mkdtemp()
         self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+        self.test_id = str(uuid.uuid4())[:8]  # Short unique ID
 
     def teardown_method(self):
         """Clean up test environment"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _get_unique_workspace_name(self, base_name: str) -> str:
+        """Generate unique workspace name for test isolation"""
+        return f"{base_name}-{self.test_id}"
 
     def test_parse_single_file_patch(self):
         """Test parsing a single file patch"""
@@ -175,15 +181,20 @@ class TestSearchReplacePatchApplication:
         """Setup test environment"""
         self.temp_dir = tempfile.mkdtemp()
         self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+        self.test_id = str(uuid.uuid4())[:8]  # Short unique ID
 
     def teardown_method(self):
         """Clean up test environment"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    def _get_unique_workspace_name(self, base_name: str) -> str:
+        """Generate unique workspace name for test isolation"""
+        return f"{base_name}-{self.test_id}"
+
     @pytest.mark.asyncio
     async def test_apply_patch_exact_match(self):
         """Test applying patch with exact content match"""
-        workspace_name = "test-workspace"
+        workspace_name = self._get_unique_workspace_name("test-workspace")
         await self.workspace_manager.create_workspace(workspace_name)
         
         # Create initial file
@@ -368,10 +379,15 @@ class TestFuzzyReplaceLogic:
         """Setup test environment"""
         self.temp_dir = tempfile.mkdtemp()
         self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+        self.test_id = str(uuid.uuid4())[:8]  # Short unique ID
 
     def teardown_method(self):
         """Clean up test environment"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _get_unique_workspace_name(self, base_name: str) -> str:
+        """Generate unique workspace name for test isolation"""
+        return f"{base_name}-{self.test_id}"
 
     def test_fuzzy_replace_high_similarity(self):
         """Test fuzzy replacement with high similarity content"""
@@ -458,10 +474,15 @@ class TestRealWhooshFuzzySearch:
         """Setup test environment with real Whoosh index"""
         self.temp_dir = tempfile.mkdtemp()
         self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+        self.test_id = str(uuid.uuid4())[:8]  # Short unique ID
 
     def teardown_method(self):
         """Clean up test environment"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _get_unique_workspace_name(self, base_name: str) -> str:
+        """Generate unique workspace name for test isolation"""
+        return f"{base_name}-{self.test_id}"
 
     @pytest.mark.asyncio
     async def test_fuzzy_search_with_real_index(self):
@@ -651,10 +672,15 @@ class TestEdgeCasesAndErrorHandling:
         """Setup test environment"""
         self.temp_dir = tempfile.mkdtemp()
         self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+        self.test_id = str(uuid.uuid4())[:8]  # Short unique ID
 
     def teardown_method(self):
         """Clean up test environment"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _get_unique_workspace_name(self, base_name: str) -> str:
+        """Generate unique workspace name for test isolation"""
+        return f"{base_name}-{self.test_id}"
 
     @pytest.mark.asyncio
     async def test_apply_empty_patch(self):
@@ -1205,10 +1231,15 @@ class TestIntegrationScenarios:
         """Setup test environment"""
         self.temp_dir = tempfile.mkdtemp()
         self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+        self.test_id = str(uuid.uuid4())[:8]  # Short unique ID
 
     def teardown_method(self):
         """Clean up test environment"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _get_unique_workspace_name(self, base_name: str) -> str:
+        """Generate unique workspace name for test isolation"""
+        return f"{base_name}-{self.test_id}"
 
     @pytest.mark.asyncio
     async def test_refactoring_scenario_rename_class(self):
@@ -1463,10 +1494,15 @@ class TestSpecialFileTypes:
         """Setup test environment"""
         self.temp_dir = tempfile.mkdtemp()
         self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+        self.test_id = str(uuid.uuid4())[:8]  # Short unique ID
 
     def teardown_method(self):
         """Clean up test environment"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _get_unique_workspace_name(self, base_name: str) -> str:
+        """Generate unique workspace name for test isolation"""
+        return f"{base_name}-{self.test_id}"
 
     @pytest.mark.asyncio
     async def test_apply_patch_to_json_file(self):
@@ -1691,10 +1727,15 @@ class TestAdvancedEdgeCases:
         """Setup test environment"""
         self.temp_dir = tempfile.mkdtemp()
         self.workspace_manager = WorkspaceManager(base_dir=self.temp_dir)
+        self.test_id = str(uuid.uuid4())[:8]  # Short unique ID
 
     def teardown_method(self):
         """Clean up test environment"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _get_unique_workspace_name(self, base_name: str) -> str:
+        """Generate unique workspace name for test isolation"""
+        return f"{base_name}-{self.test_id}"
 
     @pytest.mark.asyncio
     async def test_apply_patch_with_circular_replacement(self):
