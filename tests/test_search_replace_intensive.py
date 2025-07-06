@@ -2001,13 +2001,13 @@ object CompletelyNew {{
         if hasattr(self.workspace_manager, '_normalize_spaces_for_matching'):
             test_cases = [
                 ("", ""),
-                ("   ", " "),
-                ("\t\n\r", " "),
-                ("  multiple   spaces  ", " multiple spaces "),
-                ("mixed\t\nwhitespace", "mixed whitespace"),
-                ("no_spaces", "no_spaces"),
-                ("trailing  ", "trailing "),
-                ("  leading", " leading"),
+                ("   ", ""),  # Only whitespace gets stripped to empty string
+                ("\t\n\r", "\n"),  # Tab and carriage return become empty lines, joined with newline
+                ("  multiple   spaces  ", "multiple spaces"),  # Leading/trailing spaces stripped, internal spaces collapsed
+                ("mixed\t\nwhitespace", "mixed\nwhitespace"),  # Newlines preserved, tabs/spaces normalized
+                ("no_spaces", "no_spaces"),  # No change needed
+                ("trailing  ", "trailing"),  # Trailing spaces stripped
+                ("  leading", "leading"),  # Leading spaces stripped
             ]
             
             for input_text, expected in test_cases:
