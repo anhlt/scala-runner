@@ -1829,13 +1829,13 @@ val comment = \"\"\"
 
         patch_content = f"""{file_path}
 <<<<<<< SEARCH
-def level10() = {
+def level10() = {{
                       "very deep"
-                    }
+                    }}
 =======
-def level10() = {
+def level10() = {{
                       "modified deep"
-                    }
+                    }}
 >>>>>>> REPLACE"""
 
         result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
@@ -1870,21 +1870,21 @@ def level10() = {
         # Create search content that should be right at fuzzy match threshold
         patch_content = f"""{file_path}
 <<<<<<< SEARCH
-def calculate(x: Int, y: Int, z: Int): Int = {
+def calculate(x: Int, y: Int, z: Int): Int = {{
     val step1 = x * 2
     val step2 = y * 3
     val step3 = z * 5
     val result = step1 + step2 + step3
     result
-  }
+  }}
 =======
-def calculate(x: Int, y: Int, z: Int): Int = {
+def calculate(x: Int, y: Int, z: Int): Int = {{
     val step1 = x << 1
     val step2 = y * 3
     val step3 = z << 2
     val result = step1 + step2 + step3
     result
-  }
+  }}
 >>>>>>> REPLACE"""
 
         result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
@@ -1946,9 +1946,9 @@ def end() = "modified"
 
         patch_content = f"""{file_path}
 <<<<<<< SEARCH
-object Start {
+object Start {{
 =======
-object Modified {
+object Modified {{
 >>>>>>> REPLACE"""
 
         result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
@@ -1976,14 +1976,14 @@ object Modified {
 
         patch_content = f"""{file_path}
 <<<<<<< SEARCH
-object Entire {
+object Entire {{
   def method() = "replace entire file"
-}
+}}
 =======
-object CompletelyNew {
+object CompletelyNew {{
   def newMethod() = "brand new content"
   def anotherMethod() = "more content"
-}
+}}
 >>>>>>> REPLACE"""
 
         result = await self.workspace_manager.apply_patch(workspace_name, patch_content)
