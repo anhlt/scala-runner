@@ -192,18 +192,6 @@ async def force_reindex_workspace(workspace_name: str):
         raise HTTPException(status_code=500, detail=f"Failed to re-index workspace: {str(e)}")
 
 
-@router.get("/{workspace_name}/index/status")
-async def get_index_status(workspace_name: str):
-    """Get indexing status for a workspace"""
-    try:
-        result = await workspace_manager.get_index_status(workspace_name)
-        return {"status": "success", "data": result}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error getting index status: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get index status: {str(e)}")
-
 
 @router.post("/{workspace_name}/index/sync")
 async def sync_index_with_filesystem(workspace_name: str):
@@ -218,25 +206,20 @@ async def sync_index_with_filesystem(workspace_name: str):
         raise HTTPException(status_code=500, detail=f"Failed to sync index: {str(e)}")
 
 
-@router.post("/{workspace_name}/index/wait-ready")
-async def wait_for_index_ready(workspace_name: str, timeout: int = 10):
-    """Wait for index to be ready and up-to-date"""
-    try:
-        result = await workspace_manager.wait_for_index_ready(workspace_name, timeout)
-        return {"status": "success", "data": result}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error waiting for index ready: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to wait for index ready: {str(e)}")
 
 
-@router.get("/{workspace_name}/index/queue-status")
-async def get_index_queue_status():
-    """Get status of the indexing queue"""
+
+
+@router.post("/index/force-unlock")
+async def force_unlock_index():
+    """Force unlock the Whoosh index by removing all lock files
+    
+    Use this endpoint when the index is locked and preventing operations.
+    This will remove all Whoosh lock files and verify index accessibility.
+    """
     try:
-        result = await workspace_manager.get_index_queue_status()
+        result = await workspace_manager.force_unlock_index()
         return {"status": "success", "data": result}
     except Exception as e:
-        logger.error(f"Error getting index queue status: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get index queue status: {str(e)}") 
+        logger.error(f"Error force unlocking index: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to force unlock index: {str(e)}") 

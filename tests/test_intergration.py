@@ -248,9 +248,9 @@ object SearchableExample {
     )
     assert resp.status_code == 200, resp.text
 
-    # Wait for indexing to be ready before searching
-    resp = client.post(f"/workspaces/{workspace_name}/index/wait-ready", params={"timeout": 15})
-    assert resp.status_code == 200, f"Index wait-ready failed: {resp.text}"
+    # Since we removed concurrency control, indexing is now direct and immediate
+    # A small delay ensures index commits are complete
+    time.sleep(0.1)
 
     # Search for content (should work immediately now)
     resp = client.post(

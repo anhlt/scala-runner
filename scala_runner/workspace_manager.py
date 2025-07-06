@@ -15,9 +15,8 @@ import git
 from urllib.parse import urlparse
 import re
 import difflib
-from enum import Enum
-from dataclasses import dataclass
 import time
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -30,238 +29,28 @@ file_schema = Schema(
     extension=TEXT(stored=True)
 )
 
-class IndexTaskType(Enum):
-    """Types of indexing tasks"""
-    INDEX_FILE = "index_file"
-    REMOVE_FILE = "remove_file"
-    REMOVE_WORKSPACE = "remove_workspace"
-    REINDEX_WORKSPACE = "reindex_workspace"
 
-@dataclass
-class IndexTask:
-    """Represents an indexing task"""
-    task_type: IndexTaskType
-    workspace_name: str
-    file_path: Optional[str] = None
-    content: Optional[str] = None
-    priority: int = 0  # Lower number = higher priority
-    timestamp: float = 0.0
-    
-    def __post_init__(self):
-        if self.timestamp == 0.0:
-            self.timestamp = time.time()
 
 class WorkspaceManager:
     def __init__(self, base_dir: str = "/tmp"):
         self.base_dir = Path(base_dir)
         self.workspaces_dir = self.base_dir / "workspaces"
         self.index_dir = self.base_dir / "search_index"
+        
+        # Create directories
         self.workspaces_dir.mkdir(parents=True, exist_ok=True)
         self.index_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize search index
         self._init_search_index()
         
-        # Initialize async lock and FIFO queue for indexing
-        self._index_lock: Optional[asyncio.Lock] = None
-        self._index_queue: Optional[asyncio.Queue[IndexTask]] = None
-        self._index_worker_task: Optional[asyncio.Task] = None
-        self._shutdown_event: Optional[asyncio.Event] = None
-        self._worker_started = False
+        # Removed concurrency control - no more queues, workers, or locks
+        logger.info("WorkspaceManager initialized without concurrency control")
 
     def _init_search_index(self):
-        """Initialize the search index"""
+        """Initialize the Whoosh search index"""
         if not exists_in(str(self.index_dir)):
             create_in(str(self.index_dir), file_schema)
-
-    def _ensure_async_components_initialized(self):
-        """Ensure async components are initialized when event loop is available"""
-        if not self._worker_started:
-            try:
-                # Initialize async components
-                self._index_lock = asyncio.Lock()
-                self._index_queue = asyncio.Queue()
-                self._shutdown_event = asyncio.Event()
-                self._worker_started = True
-                
-                # Start the index worker
-                self._start_index_worker()
-                logger.info("Initialized async indexing components")
-            except RuntimeError:
-                # No event loop running, defer initialization
-                pass
-
-    def _start_index_worker(self):
-        """Start the background index worker"""
-        if self._index_worker_task is None or self._index_worker_task.done():
-            self._index_worker_task = asyncio.create_task(self._index_worker())
-            logger.info("Started index worker task")
-
-    async def _index_worker(self):
-        """Background worker that processes indexing tasks from the FIFO queue"""
-        logger.info("Index worker started")
-        
-        while self._shutdown_event is not None and not self._shutdown_event.is_set():
-            try:
-                # Wait for a task with timeout to allow checking shutdown event
-                if self._index_queue is None:
-                    await asyncio.sleep(1.0)
-                    continue
-                    
-                try:
-                    task = await asyncio.wait_for(
-                        self._index_queue.get(), 
-                        timeout=1.0
-                    )
-                except asyncio.TimeoutError:
-                    continue
-                
-                # Process the task with lock protection
-                if self._index_lock is not None:
-                    async with self._index_lock:
-                        await self._process_index_task(task)
-                else:
-                    await self._process_index_task(task)
-                
-                # Mark task as done
-                self._index_queue.task_done()
-                
-            except asyncio.CancelledError:
-                logger.info("Index worker cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in index worker: {e}")
-                # Continue processing other tasks
-                
-        logger.info("Index worker stopped")
-
-    async def _process_index_task(self, task: IndexTask):
-        """Process a single indexing task"""
-        try:
-            logger.debug(f"Processing index task: {task.task_type.value} for {task.workspace_name}")
-            
-            if task.task_type == IndexTaskType.INDEX_FILE:
-                if task.file_path is None or task.content is None:
-                    logger.error(f"INDEX_FILE task missing required fields: file_path={task.file_path}, content={task.content is not None}")
-                    return
-                await self._index_file_direct(task.workspace_name, task.file_path, task.content)
-            elif task.task_type == IndexTaskType.REMOVE_FILE:
-                if task.file_path is None:
-                    logger.error(f"REMOVE_FILE task missing file_path")
-                    return
-                await self._remove_file_from_index_direct(task.workspace_name, task.file_path)
-            elif task.task_type == IndexTaskType.REMOVE_WORKSPACE:
-                await self._remove_workspace_from_index_direct(task.workspace_name)
-            elif task.task_type == IndexTaskType.REINDEX_WORKSPACE:
-                await self._reindex_workspace_direct(task.workspace_name)
-            else:
-                logger.warning(f"Unknown index task type: {task.task_type}")
-                
-        except Exception as e:
-            logger.error(f"Error processing index task {task.task_type.value}: {e}")
-
-    async def _queue_index_task(self, task: IndexTask, wait_for_completion: bool = False):
-        """Queue an indexing task for processing"""
-        self._ensure_async_components_initialized()
-        if not self._worker_started or self._index_queue is None:
-            # Fallback to direct processing if async components not available
-            await self._process_index_task(task)
-            return
-            
-        await self._index_queue.put(task)
-        logger.debug(f"Queued index task: {task.task_type.value} for {task.workspace_name}")
-        
-        if wait_for_completion:
-            # Wait for this specific task to be processed
-            # Note: This is a simple approach - for production you might want task IDs
-            await self._index_queue.join()
-
-    async def shutdown(self):
-        """Shutdown the index worker gracefully"""
-        logger.info("Shutting down WorkspaceManager...")
-        
-        # Signal shutdown
-        if self._shutdown_event is not None:
-            self._shutdown_event.set()
-        
-        # Wait for current tasks to complete
-        if self._index_queue is not None:
-            try:
-                await asyncio.wait_for(self._index_queue.join(), timeout=30.0)
-            except asyncio.TimeoutError:
-                logger.warning("Timeout waiting for index queue to complete")
-        
-        # Cancel the worker task
-        if self._index_worker_task and not self._index_worker_task.done():
-            self._index_worker_task.cancel()
-            try:
-                await self._index_worker_task
-            except asyncio.CancelledError:
-                pass
-        
-        logger.info("WorkspaceManager shutdown complete")
-
-    async def create_workspace(self, workspace_name: str) -> Dict:
-        """Create a new workspace directory"""
-        if not self._is_valid_workspace_name(workspace_name):
-            raise ValueError("Invalid workspace name. Use alphanumeric characters, hyphens, and underscores only.")
-        
-        workspace_path = self.workspaces_dir / workspace_name
-        
-        if workspace_path.exists():
-            raise ValueError(f"Workspace '{workspace_name}' already exists")
-        
-        workspace_path.mkdir(parents=True)
-        
-        # Create basic SBT project structure
-        await self._create_sbt_structure(workspace_path)
-        
-        logger.info(f"Created workspace: {workspace_name}")
-        return {
-            "workspace_name": workspace_name,
-            "path": str(workspace_path),
-            "created": True
-        }
-
-    async def _create_sbt_structure(self, workspace_path: Path):
-        """Create basic SBT project structure"""
-        # Create directories
-        (workspace_path / "src" / "main" / "scala").mkdir(parents=True)
-        (workspace_path / "src" / "test" / "scala").mkdir(parents=True)
-        (workspace_path / "project").mkdir(parents=True)
-        
-        # Create build.sbt with stable Scala 2.13 and Java 21 compatibility
-        build_sbt_content = '''ThisBuild / version := "0.1.0-SNAPSHOT"
-ThisBuild / scalaVersion := "2.13.14"
-
-lazy val root = (project in file("."))
-  .settings(
-    name := "scala-project",
-    libraryDependencies ++= Seq(
-      "org.typelevel" %% "cats-core" % "2.12.0",
-      "org.scalatest" %% "scalatest" % "3.2.17" % Test
-    ),
-    // Ensure Java 21 compatibility
-    javacOptions ++= Seq("-source", "11", "-target", "11"),
-    scalacOptions ++= Seq("-release", "11")
-  )
-'''
-        async with aiofiles.open(workspace_path / "build.sbt", "w") as f:
-            await f.write(build_sbt_content)
-        
-        # Create plugins.sbt
-        plugins_content = 'addSbtPlugin("com.github.sbt" % "sbt-native-packager" % "1.9.16")\n'
-        async with aiofiles.open(workspace_path / "project" / "plugins.sbt", "w") as f:
-            await f.write(plugins_content)
-            
-        # Create a sample Main.scala
-        main_scala_content = '''object Main extends App {
-  println("Hello, SBT World!")
-  println("Scala version: " + scala.util.Properties.versionString)
-}
-'''
-        async with aiofiles.open(workspace_path / "src" / "main" / "scala" / "Main.scala", "w") as f:
-            await f.write(main_scala_content)
 
     def list_workspaces(self) -> List[Dict]:
         """List all workspaces"""
@@ -1115,6 +904,124 @@ lazy val root = (project in file("."))
         
         return patches
 
+    def _normalize_spaces_for_matching(self, content: str) -> str:
+        """Normalize spaces in content for flexible matching"""
+        if not content:
+            return content
+        
+        lines = content.split('\n')
+        normalized_lines = []
+        
+        for line in lines:
+            # Strip leading/trailing whitespace and collapse multiple spaces
+            normalized_line = ' '.join(line.strip().split())
+            normalized_lines.append(normalized_line)
+        
+        return '\n'.join(normalized_lines)
+    
+    def _preserve_indentation_in_replacement(self, original_content: str, replacement_content: str) -> str:
+        """Apply the indentation pattern from original content to replacement content"""
+        if not original_content or not replacement_content:
+            return replacement_content
+        
+        original_lines = original_content.split('\n')
+        replacement_lines = replacement_content.split('\n')
+        
+        # Extract indentation patterns from original content
+        indentations = []
+        for line in original_lines:
+            if line.strip():  # Only consider non-empty lines
+                # Get the leading whitespace
+                indent = len(line) - len(line.lstrip())
+                indentations.append(line[:indent])
+            else:
+                indentations.append('')  # Empty line
+        
+        # Get the indentation of the last line in search content for extra lines
+        last_line_indent = ''
+        if indentations:
+            # Find the last non-empty indentation
+            for indent in reversed(indentations):
+                if indent:
+                    last_line_indent = indent
+                    break
+        
+        # Apply indentation to replacement content
+        result_lines = []
+        for i, replacement_line in enumerate(replacement_lines):
+            if replacement_line.strip() == '':
+                result_lines.append('')  # Keep empty lines empty
+                continue
+                
+            if i < len(indentations):
+                # Use the corresponding indentation from original
+                result_lines.append(indentations[i] + replacement_line.strip())
+            else:
+                # For extra lines: use the indentation of the last line from search
+                result_lines.append(last_line_indent + replacement_line.strip())
+        
+        return '\n'.join(result_lines)
+    
+    def _find_best_match_with_normalized_spaces(self, original_content: str, search_content: str) -> Dict:
+        """Find the best matching location considering normalized spaces"""
+        if not search_content.strip():
+            return {"found": False, "start_pos": -1, "end_pos": -1}
+        
+        # Normalize both contents for comparison
+        normalized_original = self._normalize_spaces_for_matching(original_content)
+        normalized_search = self._normalize_spaces_for_matching(search_content)
+        
+        # Find the position in normalized content
+        normalized_pos = normalized_original.find(normalized_search)
+        if normalized_pos == -1:
+            return {"found": False, "start_pos": -1, "end_pos": -1}
+        
+        # Map back to original content position
+        # Count characters up to the match position in normalized content
+        original_lines = original_content.split('\n')
+        normalized_lines = normalized_original.split('\n')
+        search_lines = normalized_search.split('\n')
+        
+        # Find which line the match starts on
+        chars_counted = 0
+        target_line = 0
+        
+        for i, norm_line in enumerate(normalized_lines):
+            if chars_counted + len(norm_line) >= normalized_pos:
+                target_line = i
+                break
+            chars_counted += len(norm_line) + 1  # +1 for newline
+        
+        # Try to find the corresponding section in original content
+        search_line_count = len(search_lines)
+        
+        # Look for the best matching section around the target line
+        best_match = {"found": False, "start_pos": -1, "end_pos": -1}
+        best_ratio = 0
+        
+        for start_line in range(max(0, target_line - 2), min(len(original_lines), target_line + 3)):
+            if start_line + search_line_count > len(original_lines):
+                continue
+            
+            end_line = start_line + search_line_count
+            candidate_lines = original_lines[start_line:end_line]
+            candidate_text = '\n'.join(candidate_lines)
+            
+            # Normalize candidate for comparison
+            normalized_candidate = self._normalize_spaces_for_matching(candidate_text)
+            
+            # Calculate similarity
+            ratio = difflib.SequenceMatcher(None, normalized_search, normalized_candidate).ratio()
+            
+            if ratio > best_ratio and ratio > 0.8:  # High threshold for normalized matching
+                best_ratio = ratio
+                # Calculate character positions
+                start_pos = sum(len(line) + 1 for line in original_lines[:start_line])
+                end_pos = start_pos + len(candidate_text)
+                best_match = {"found": True, "start_pos": start_pos, "end_pos": end_pos}
+        
+        return best_match
+
     async def _apply_search_replace_to_file(self, workspace_path: Path, file_path: str, search_content: str, replace_content: str) -> Dict:
         """Apply search-replace operation to a specific file"""
         full_path = workspace_path / file_path
@@ -1136,17 +1043,32 @@ lazy val root = (project in file("."))
             else:
                 # Try exact match first
                 if search_content in original_content:
-                    new_content = original_content.replace(search_content, replace_content, 1)
+                    # For exact match, preserve indentation from the original matched content
+                    start_pos = original_content.find(search_content)
+                    end_pos = start_pos + len(search_content)
+                    matched_content = original_content[start_pos:end_pos]
+                    indentation_preserved_replacement = self._preserve_indentation_in_replacement(matched_content, replace_content)
+                    new_content = original_content[:start_pos] + indentation_preserved_replacement + original_content[end_pos:]
                 else:
-                    # Try fuzzy matching for more flexible replacement
-                    fuzzy_result = self._fuzzy_replace(original_content, search_content, replace_content)
-                    if fuzzy_result["found"]:
-                        new_content = fuzzy_result["content"]
+                    # Try space-normalized matching
+                    match_result = self._find_best_match_with_normalized_spaces(original_content, search_content)
+                    if match_result["found"]:
+                        # Replace the matched section with preserved indentation
+                        start_pos = match_result["start_pos"]
+                        end_pos = match_result["end_pos"]
+                        matched_content = original_content[start_pos:end_pos]
+                        indentation_preserved_replacement = self._preserve_indentation_in_replacement(matched_content, replace_content)
+                        new_content = original_content[:start_pos] + indentation_preserved_replacement + original_content[end_pos:]
                     else:
-                        return {
-                            "success": False,
-                            "error": f"Search content not found in {file_path}. Searched for: {search_content[:100]}..."
-                        }
+                        # Try fuzzy matching for more flexible replacement
+                        fuzzy_result = self._fuzzy_replace(original_content, search_content, replace_content)
+                        if fuzzy_result["found"]:
+                            new_content = fuzzy_result["content"]
+                        else:
+                            return {
+                                "success": False,
+                                "error": f"Search content not found in {file_path}. Searched for: {search_content[:100]}..."
+                            }
         
         # Write the modified file
             async with aiofiles.open(full_path, "w") as f:
@@ -1165,7 +1087,7 @@ lazy val root = (project in file("."))
             }
 
     def _fuzzy_replace(self, content: str, search_content: str, replace_content: str) -> Dict:
-        """Perform fuzzy matching and replacement"""
+        """Perform fuzzy matching and replacement with space normalization"""
         lines = content.split('\n')
         search_lines = search_content.strip().split('\n')
         
@@ -1177,14 +1099,24 @@ lazy val root = (project in file("."))
         best_match_start = -1
         best_match_end = -1
         
+        # Normalize search content for comparison
+        normalized_search = self._normalize_spaces_for_matching(search_content.strip())
+        
         # Try to find a contiguous block that best matches the search content
         for start_idx in range(len(lines) - len(search_lines) + 1):
             end_idx = start_idx + len(search_lines)
             candidate_lines = lines[start_idx:end_idx]
             candidate_text = '\n'.join(candidate_lines)
             
-            # Calculate similarity ratio
-            ratio = difflib.SequenceMatcher(None, search_content.strip(), candidate_text.strip()).ratio()
+            # Calculate similarity ratio using both original and normalized content
+            original_ratio = difflib.SequenceMatcher(None, search_content.strip(), candidate_text.strip()).ratio()
+            
+            # Also calculate normalized ratio for better space-insensitive matching
+            normalized_candidate = self._normalize_spaces_for_matching(candidate_text.strip())
+            normalized_ratio = difflib.SequenceMatcher(None, normalized_search, normalized_candidate).ratio()
+            
+            # Use the higher ratio for better matching
+            ratio = max(original_ratio, normalized_ratio)
             
             if ratio > best_match_ratio:
                 best_match_ratio = ratio
@@ -1193,9 +1125,13 @@ lazy val root = (project in file("."))
         
         # If we found a good enough match (>70% similar), replace it
         if best_match_ratio > 0.7:
+            # Preserve indentation from the matched content
+            matched_content = '\n'.join(lines[best_match_start:best_match_end])
+            indentation_preserved_replacement = self._preserve_indentation_in_replacement(matched_content, replace_content)
+            
             new_lines = (
                 lines[:best_match_start] +
-                replace_content.split('\n') +
+                indentation_preserved_replacement.split('\n') +
                 lines[best_match_end:]
             )
             return {
@@ -1338,10 +1274,11 @@ lazy val root = (project in file("."))
             return []
 
     async def _index_file_direct(self, workspace_name: str, file_path: str, content: str):
-        """Direct indexing method (called by queue worker with lock protection)"""
+        """Direct indexing method for files"""
         try:
             index = open_dir(str(self.index_dir))
-            writer = index.writer()
+            # Use limbo=True to avoid creating lock files
+            writer = index.writer(limbo=True)
             
             # Remove existing entry for this file
             writer.delete_by_term("filepath", f"{workspace_name}/{file_path}")
@@ -1361,31 +1298,102 @@ lazy val root = (project in file("."))
             
         except Exception as e:
             logger.error(f"Direct indexing error for {workspace_name}/{file_path}: {e}")
+            # Try to clean up any lock files if they exist
+            await self._cleanup_whoosh_locks()
 
     async def _remove_file_from_index_direct(self, workspace_name: str, file_path: str):
-        """Direct file removal method (called by queue worker with lock protection)"""
+        """Direct file removal method for index"""
         try:
             index = open_dir(str(self.index_dir))
-            writer = index.writer()
+            # Use limbo=True to avoid creating lock files
+            writer = index.writer(limbo=True)
             writer.delete_by_term("filepath", f"{workspace_name}/{file_path}")
             writer.commit()
             logger.debug(f"Removed from index: {workspace_name}/{file_path}")
         except Exception as e:
             logger.error(f"Direct index removal error for {workspace_name}/{file_path}: {e}")
+            # Try to clean up any lock files if they exist
+            await self._cleanup_whoosh_locks()
 
     async def _remove_workspace_from_index_direct(self, workspace_name: str):
-        """Direct workspace removal method (called by queue worker with lock protection)"""
+        """Direct workspace removal method for index"""
         try:
             index = open_dir(str(self.index_dir))
-            writer = index.writer()
+            # Use limbo=True to avoid creating lock files
+            writer = index.writer(limbo=True)
             writer.delete_by_term("workspace", workspace_name)
             writer.commit()
             logger.debug(f"Removed workspace from index: {workspace_name}")
         except Exception as e:
             logger.error(f"Direct workspace index removal error for {workspace_name}: {e}")
+            # Try to clean up any lock files if they exist
+            await self._cleanup_whoosh_locks()
+
+    async def _cleanup_whoosh_locks(self):
+        """Clean up any Whoosh lock files that may be preventing index access"""
+        try:
+            import glob
+            
+            # Look for Whoosh lock files in the index directory
+            lock_pattern = str(self.index_dir / "*.lock")
+            lock_files = glob.glob(lock_pattern)
+            
+            for lock_file in lock_files:
+                try:
+                    os.remove(lock_file)
+                    logger.info(f"Removed Whoosh lock file: {lock_file}")
+                except Exception as e:
+                    logger.warning(f"Could not remove lock file {lock_file}: {e}")
+                    
+            # Also check for _MAIN_*.lock files which are common in Whoosh
+            main_lock_pattern = str(self.index_dir / "_MAIN_*.lock")
+            main_lock_files = glob.glob(main_lock_pattern)
+            
+            for lock_file in main_lock_files:
+                try:
+                    os.remove(lock_file)
+                    logger.info(f"Removed Whoosh main lock file: {lock_file}")
+                except Exception as e:
+                    logger.warning(f"Could not remove main lock file {lock_file}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error during lock cleanup: {e}")
+
+    async def force_unlock_index(self) -> Dict:
+        """Force unlock the Whoosh index by removing all lock files"""
+        try:
+            await self._cleanup_whoosh_locks()
+            
+            # Try to verify the index is accessible after cleanup
+            try:
+                index = open_dir(str(self.index_dir))
+                # Test with a quick searcher access
+                with index.searcher() as searcher:
+                    pass  # Just test that we can create a searcher
+                
+                return {
+                    "status": "success",
+                    "message": "Index unlocked successfully",
+                    "index_accessible": True
+                }
+            except Exception as verify_error:
+                return {
+                    "status": "partial_success",
+                    "message": "Lock files removed but index may still have issues",
+                    "index_accessible": False,
+                    "verification_error": str(verify_error)
+                }
+                
+        except Exception as e:
+            logger.error(f"Error forcing unlock of index: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to unlock index: {str(e)}",
+                "index_accessible": False
+            }
 
     async def _reindex_workspace_direct(self, workspace_name: str):
-        """Direct workspace reindexing method (called by queue worker with lock protection)"""
+        """Direct workspace reindexing method"""
         try:
             # First remove all existing entries for this workspace
             await self._remove_workspace_from_index_direct(workspace_name)
@@ -1418,7 +1426,7 @@ lazy val root = (project in file("."))
                         async with aiofiles.open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                             content = await f.read()
                         
-                        # Index the file directly (we're already in the worker with lock)
+                        # Index the file directly
                         relative_path = str(file_path.relative_to(workspace_path))
                         await self._index_file_direct(workspace_name, relative_path, content)
                         indexed_count += 1
@@ -1433,49 +1441,22 @@ lazy val root = (project in file("."))
             logger.error(f"Direct workspace reindexing error for {workspace_name}: {e}")
 
     async def _index_file(self, workspace_name: str, file_path: str, content: str):
-        """Queue a file indexing task"""
-        task = IndexTask(
-            task_type=IndexTaskType.INDEX_FILE,
-            workspace_name=workspace_name,
-            file_path=file_path,
-            content=content
-        )
-        await self._queue_index_task(task)
+        """Index a file directly (no more queuing)"""
+        await self._index_file_direct(workspace_name, file_path, content)
 
     async def _remove_file_from_index(self, workspace_name: str, file_path: str):
-        """Queue a file removal task"""
-        task = IndexTask(
-            task_type=IndexTaskType.REMOVE_FILE,
-            workspace_name=workspace_name,
-            file_path=file_path
-        )
-        await self._queue_index_task(task)
+        """Remove a file from index directly (no more queuing)"""
+        await self._remove_file_from_index_direct(workspace_name, file_path)
 
     async def _remove_workspace_from_index(self, workspace_name: str):
-        """Queue a workspace removal task"""
-        task = IndexTask(
-            task_type=IndexTaskType.REMOVE_WORKSPACE,
-            workspace_name=workspace_name
-        )
-        await self._queue_index_task(task)
+        """Remove a workspace from index directly (no more queuing)"""
+        await self._remove_workspace_from_index_direct(workspace_name)
 
-    async def _queue_reindex_workspace(self, workspace_name: str, wait_for_completion: bool = False):
-        """Queue a workspace reindexing task"""
-        task = IndexTask(
-            task_type=IndexTaskType.REINDEX_WORKSPACE,
-            workspace_name=workspace_name,
-            priority=1  # Higher priority for reindexing
-        )
-        await self._queue_index_task(task, wait_for_completion=wait_for_completion)
+    async def _reindex_workspace(self, workspace_name: str):
+        """Reindex a workspace directly (no more queuing)"""
+        await self._reindex_workspace_direct(workspace_name)
 
-    async def get_index_queue_status(self) -> Dict:
-        """Get status of the indexing queue"""
-        self._ensure_async_components_initialized()
-        return {
-            "queue_size": self._index_queue.qsize() if self._index_queue is not None else 0,
-            "worker_running": not (self._index_worker_task and self._index_worker_task.done()),
-            "shutdown_requested": self._shutdown_event.is_set() if self._shutdown_event is not None else False
-        }
+
 
     def _count_files(self, path: Path) -> int:
         """Count files in a directory recursively"""
@@ -2159,7 +2140,7 @@ lazy val root = (project in file("."))
 
     async def force_reindex_workspace(self, workspace_name: str) -> Dict:
         """
-        Force complete re-indexing of a workspace using the queue system
+        Force complete re-indexing of a workspace directly
         
         Args:
             workspace_name: Name of the workspace to re-index
@@ -2173,8 +2154,8 @@ lazy val root = (project in file("."))
             raise ValueError(f"Workspace '{workspace_name}' not found")
         
         try:
-            # Queue the reindexing task and wait for completion
-            await self._queue_reindex_workspace(workspace_name, wait_for_completion=True)
+            # Run the reindexing directly
+            await self._reindex_workspace(workspace_name)
             
             # Get count of indexed files after reindexing
             indexed_count = await self._count_indexed_files(workspace_name)
@@ -2192,55 +2173,7 @@ lazy val root = (project in file("."))
             logger.error(f"Error force re-indexing workspace: {e}")
             raise ValueError(f"Failed to re-index workspace: {str(e)}")
 
-    async def get_index_status(self, workspace_name: str) -> Dict:
-        """
-        Get indexing status for a workspace
-        
-        Args:
-            workspace_name: Name of the workspace
-            
-        Returns:
-            Dict with index status information
-        """
-        workspace_path = self.workspaces_dir / workspace_name
-        
-        if not workspace_path.exists():
-            raise ValueError(f"Workspace '{workspace_name}' not found")
-        
-        try:
-            # Count files in filesystem
-            indexable_extensions = {
-                '.scala', '.java', '.sbt', '.sc', '.py', '.js', '.ts', '.html', '.css',
-                '.md', '.txt', '.yml', '.yaml', '.json', '.xml', '.properties', '.conf',
-                '.sh', '.sql', '.dockerfile', '.gradle', '.kt', '.rs', '.go', '.rb'
-            }
-            
-            filesystem_files = 0
-            for file_path in workspace_path.rglob("*"):
-                if (file_path.is_file() and 
-                    not file_path.name.startswith('.') and 
-                    file_path.suffix.lower() in indexable_extensions):
-                    filesystem_files += 1
-            
-            # Count indexed files
-            indexed_files = await self._count_indexed_files(workspace_name)
-            
-            # Check if index is up to date
-            is_up_to_date = filesystem_files == indexed_files
-            
-            return {
-                "workspace_name": workspace_name,
-                "filesystem_files": filesystem_files,
-                "indexed_files": indexed_files,
-                "is_up_to_date": is_up_to_date,
-                "missing_files": max(0, filesystem_files - indexed_files),
-                "extra_indexed": max(0, indexed_files - filesystem_files),
-                "index_coverage": round((indexed_files / filesystem_files * 100) if filesystem_files > 0 else 100, 2)
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting index status: {e}")
-            raise ValueError(f"Failed to get index status: {str(e)}")
+
 
     async def sync_index_with_filesystem(self, workspace_name: str) -> Dict:
         """
@@ -2258,19 +2191,6 @@ lazy val root = (project in file("."))
             raise ValueError(f"Workspace '{workspace_name}' not found")
         
         try:
-            # Get current index status
-            status = await self.get_index_status(workspace_name)
-            
-            if status["is_up_to_date"]:
-                return {
-                    "workspace_name": workspace_name,
-                    "already_synced": True,
-                    "files_added": 0,
-                    "files_removed": 0,
-                    "files_updated": 0,
-                    "message": "Index already up to date"
-                }
-            
             # Get list of indexed files
             indexed_files = set()
             try:
@@ -2306,11 +2226,9 @@ lazy val root = (project in file("."))
             # Find differences
             files_to_add = filesystem_files - indexed_files
             files_to_remove = indexed_files - filesystem_files
-            files_to_update = filesystem_files & indexed_files  # Files that exist in both (potential updates)
             
             files_added = 0
             files_removed = 0
-            files_updated = 0
             
             # Remove stale files from index
             for file_path in files_to_remove:
@@ -2328,15 +2246,11 @@ lazy val root = (project in file("."))
                 except Exception as e:
                     logger.warning(f"Failed to index file {file_path}: {e}")
             
-            # Optionally update existing files (check modification time)
-            # For now, we'll skip this as it's more complex and the current approach should handle most cases
-            
             return {
                 "workspace_name": workspace_name,
                 "synced": True,
                 "files_added": files_added,
                 "files_removed": files_removed,
-                "files_updated": files_updated,
                 "message": f"Synced index: +{files_added} -{files_removed} files"
             }
             
@@ -2344,51 +2258,66 @@ lazy val root = (project in file("."))
             logger.error(f"Error syncing index: {e}")
             raise ValueError(f"Failed to sync index: {str(e)}")
 
-    async def wait_for_index_ready(self, workspace_name: str, timeout: int = 10) -> Dict:
-        """
-        Wait for index to be ready and up-to-date
+ 
+
+    async def create_workspace(self, workspace_name: str) -> Dict:
+        """Create a new workspace directory"""
+        if not self._is_valid_workspace_name(workspace_name):
+            raise ValueError("Invalid workspace name. Use alphanumeric characters, hyphens, and underscores only.")
         
-        Args:
-            workspace_name: Name of the workspace
-            timeout: Maximum time to wait in seconds
+        workspace_path = self.workspaces_dir / workspace_name
+        
+        if workspace_path.exists():
+            raise ValueError(f"Workspace '{workspace_name}' already exists")
+        
+        workspace_path.mkdir(parents=True)
+        
+        # Create basic SBT project structure
+        await self._create_sbt_structure(workspace_path)
+        
+        logger.info(f"Created workspace: {workspace_name}")
+        return {
+            "workspace_name": workspace_name,
+            "path": str(workspace_path),
+            "created": True
+        }
+
+    async def _create_sbt_structure(self, workspace_path: Path):
+        """Create basic SBT project structure"""
+        # Create directories
+        (workspace_path / "src" / "main" / "scala").mkdir(parents=True)
+        (workspace_path / "src" / "test" / "scala").mkdir(parents=True)
+        (workspace_path / "project").mkdir(parents=True)
+        
+        # Create build.sbt with stable Scala 2.13 and Java 21 compatibility
+        build_sbt_content = '''ThisBuild / version := "0.1.0-SNAPSHOT"
+ThisBuild / scalaVersion := "2.13.14"
+
+lazy val root = (project in file("."))
+  .settings(
+    name := "scala-project",
+    libraryDependencies ++= Seq(
+      "org.typelevel" %% "cats-core" % "2.12.0",
+      "org.scalatest" %% "scalatest" % "3.2.17" % Test
+    ),
+    // Ensure Java 21 compatibility
+    javacOptions ++= Seq("-source", "11", "-target", "11"),
+    scalacOptions ++= Seq("-release", "11")
+  )
+'''
+        async with aiofiles.open(workspace_path / "build.sbt", "w") as f:
+            await f.write(build_sbt_content)
+        
+        # Create plugins.sbt
+        plugins_content = 'addSbtPlugin("com.github.sbt" % "sbt-native-packager" % "1.9.16")\n'
+        async with aiofiles.open(workspace_path / "project" / "plugins.sbt", "w") as f:
+            await f.write(plugins_content)
             
-        Returns:
-            Dict with readiness status
-        """
-        import asyncio
-        
-        start_time = asyncio.get_event_loop().time()
-        
-        while True:
-            try:
-                status = await self.get_index_status(workspace_name)
-                
-                if status["is_up_to_date"]:
-                    return {
-                        "workspace_name": workspace_name,
-                        "ready": True,
-                        "waited_time": round(asyncio.get_event_loop().time() - start_time, 2),
-                        "indexed_files": status["indexed_files"]
-                    }
-                
-                # Check timeout
-                if asyncio.get_event_loop().time() - start_time > timeout:
-                    return {
-                        "workspace_name": workspace_name,
-                        "ready": False,
-                        "timeout": True,
-                        "waited_time": timeout,
-                        "status": status
-                    }
-                
-                # Wait a bit before checking again
-                await asyncio.sleep(0.1)
-                
-            except Exception as e:
-                logger.error(f"Error waiting for index ready: {e}")
-                return {
-                    "workspace_name": workspace_name,
-                    "ready": False,
-                    "error": str(e),
-                    "waited_time": round(asyncio.get_event_loop().time() - start_time, 2)
-                } 
+        # Create a sample Main.scala
+        main_scala_content = '''object Main extends App {
+  println("Hello, SBT World!")
+  println("Scala version: " + scala.util.Properties.versionString)
+}
+'''
+        async with aiofiles.open(workspace_path / "src" / "main" / "scala" / "Main.scala", "w") as f:
+            await f.write(main_scala_content)
