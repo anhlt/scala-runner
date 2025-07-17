@@ -36,6 +36,7 @@ class WorkspaceManager:
         self.base_dir = Path(base_dir)
         self.workspaces_dir = self.base_dir / "workspaces"
         self.index_dir = self.base_dir / "search_index"
+        self.websocket_manager = None  # Will be set by main.py
         
         # Create directories
         self.workspaces_dir.mkdir(parents=True, exist_ok=True)
@@ -46,6 +47,11 @@ class WorkspaceManager:
         
         # Removed concurrency control - no more queues, workers, or locks
         logger.info("WorkspaceManager initialized without concurrency control")
+    
+    def set_websocket_manager(self, websocket_manager):
+        """Set the WebSocket connection manager for broadcasting file changes"""
+        self.websocket_manager = websocket_manager
+        logger.info("WebSocket manager set for file change notifications")
 
     def _init_search_index(self):
         """Initialize the Whoosh search index"""
@@ -295,6 +301,14 @@ class WorkspaceManager:
         # Index the file
         await self._index_file(workspace_name, file_path, content)
         
+        # Broadcast file change via WebSocket
+        if self.websocket_manager:
+            await self.websocket_manager.broadcast_file_change(workspace_name, {
+                "action": "created",
+                "file_path": file_path,
+                "size": len(content)
+            })
+        
         logger.info(f"Created file: {workspace_name}/{file_path}")
         return {
             "workspace_name": workspace_name,
@@ -323,6 +337,15 @@ class WorkspaceManager:
         await self._index_file(workspace_name, file_path, content)
         
         action = "updated" if file_existed else "created"
+        
+        # Broadcast file change via WebSocket
+        if self.websocket_manager:
+            await self.websocket_manager.broadcast_file_change(workspace_name, {
+                "action": action,
+                "file_path": file_path,
+                "size": len(content)
+            })
+        
         logger.info(f"{action.capitalize()} file: {workspace_name}/{file_path}")
         return {
             "workspace_name": workspace_name,
@@ -347,6 +370,13 @@ class WorkspaceManager:
         
         # Remove from index
         await self._remove_file_from_index(workspace_name, file_path)
+        
+        # Broadcast file change via WebSocket
+        if self.websocket_manager:
+            await self.websocket_manager.broadcast_file_change(workspace_name, {
+                "action": "deleted",
+                "file_path": file_path
+            })
         
         logger.info(f"Deleted file: {workspace_name}/{file_path}")
         return {

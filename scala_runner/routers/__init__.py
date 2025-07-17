@@ -9,6 +9,7 @@ from .search import router as search_router
 from .sbt import router as sbt_router
 from .bash import router as bash_router
 from .utils import router as utils_router
+from .websocket import router as websocket_router
 
 __all__ = [
     "workspace_router",
@@ -17,5 +18,6 @@ __all__ = [
     "search_router",
     "sbt_router",
     "bash_router",
-    "utils_router"
+    "utils_router",
+    "websocket_router"
 ] 

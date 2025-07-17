@@ -27,9 +27,11 @@ from .routers import (
     search_router,
     sbt_router,
     bash_router,
-    utils_router
+    utils_router,
+    websocket_router
 )
 from .routers import workspace, git, files, search, sbt, bash
+from .routers.websocket import get_connection_manager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -97,6 +99,9 @@ search.set_managers(workspace_manager)
 sbt.set_managers(workspace_manager, sbt_runner)
 bash.set_managers(bash_session_manager)
 
+# Set up WebSocket connection manager for file change notifications
+workspace_manager.set_websocket_manager(get_connection_manager())
+
 # Include all routers
 app.include_router(workspace_router)
 app.include_router(git_router)
@@ -105,6 +110,7 @@ app.include_router(search_router)
 app.include_router(sbt_router)
 app.include_router(bash_router, include_in_schema=False)  # Exclude bash APIs from OpenAPI schema
 app.include_router(utils_router)
+app.include_router(websocket_router)  # Add WebSocket router
 
 # Update the openapi endpoint in utils router to return actual schema
 @app.get(
