@@ -74,6 +74,29 @@ class GitPushPullRequest(BaseModel):
     branch_name: Optional[str] = None
 
 
+class GitSSHKeyRequest(BaseModel):
+    workspace_name: str
+    private_key: str
+    public_key: Optional[str] = None
+    passphrase: Optional[str] = None
+    key_name: Optional[str] = "id_rsa"
+
+    @field_validator("private_key")
+    def validate_private_key(cls, v: str) -> str:
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Private key cannot be empty")
+        # Basic validation for SSH private key format
+        if not ("BEGIN" in v and "PRIVATE KEY" in v and "END" in v):
+            raise ValueError("Invalid SSH private key format")
+        return v.strip()
+
+    @field_validator("key_name")
+    def validate_key_name(cls, v: str) -> str:
+        if v and not v.replace("_", "").replace("-", "").isalnum():
+            raise ValueError("Key name must contain only alphanumeric characters, hyphens, and underscores")
+        return v or "id_rsa"
+
+
 # Git Operations Endpoints
 @router.post("/checkout", summary="Checkout Git branch")
 @limiter.limit(RATE_LIMIT)
@@ -190,4 +213,41 @@ async def git_get_log(request: Request, workspace_name: str, limit: int = 10):
         raise HTTPException(404, str(e))
     except Exception as e:
         logger.error(f"Error getting Git log: {e}")
-        raise HTTPException(500, f"Internal server error: {str(e)}") 
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@router.post("/configure-ssh-key", summary="Configure SSH private key for Git authentication")
+@limiter.limit(RATE_LIMIT)
+async def configure_ssh_key(request: Request, payload: GitSSHKeyRequest):
+    """Configure SSH private key for Git authentication to enable push/pull to private repositories"""
+    try:
+        result = await workspace_manager.configure_git_ssh_key(
+            payload.workspace_name,
+            payload.private_key,
+            payload.public_key,
+            payload.passphrase,
+            payload.key_name
+        )
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Error configuring SSH key: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+@router.delete("/ssh-key/{workspace_name}", summary="Remove SSH key configuration")
+@limiter.limit(RATE_LIMIT)
+async def remove_ssh_key(request: Request, workspace_name: str):
+    """Remove SSH key configuration for a workspace"""
+    try:
+        result = await workspace_manager.remove_git_ssh_key(workspace_name)
+        return JSONResponse({"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"Error removing SSH key: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+
+ 

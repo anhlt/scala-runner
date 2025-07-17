@@ -94,12 +94,28 @@ src/main/scala/Main.scala
 **Goal**: Create a new Scala project with proper structure and dependencies
 
 **Approach**:
-1. **Create workspace** using `create_workspace`
-2. **Set up project structure** using patches to create `build.sbt`, source directories, and initial files
-3. **Verify setup** by compiling the project
-4. **Initialize Git** if needed
+1. **Create workspace** using `create_workspace` for new projects OR `clone_workspace_from_git` for existing repositories
+2. **Configure SSH access** using `configure_git_ssh_key` if working with private repositories
+3. **Set up project structure** using patches to create `build.sbt`, source directories, and initial files
+4. **Verify setup** by compiling the project
+5. **Initialize Git** if needed, or commit initial changes for cloned projects
 
-**Key Functions**: `create_workspace`, `apply_patch`, `sbt_compile`, `git_add`, `git_commit`
+**For Private Repositories**:
+```python
+# First configure SSH key
+await tools.configure_git_ssh_key(
+    workspace_name="my-project",
+    private_key=ssh_private_key_content
+)
+
+# Then clone the private repository
+await tools.clone_workspace_from_git(
+    name="my-project",
+    git_url="git@github.com:company/private-scala-project.git"
+)
+```
+
+**Key Functions**: `create_workspace`, `clone_workspace_from_git`, `configure_git_ssh_key`, `apply_patch`, `sbt_compile`, `git_add`, `git_commit`
 
 ### Implementing New Features
 
@@ -159,16 +175,60 @@ src/main/scala/Main.scala
 
 ### Working with Git History and Collaboration
 
-**Goal**: Manage version control, review changes, prepare commits
+**Goal**: Manage version control, review changes, prepare commits, and push to remote repositories
 
 **Approach**:
 1. **Check current status** using `git_status` to see modified files
 2. **Review changes** by reading files that have been modified
 3. **Stage changes selectively** using `git_add` with specific files
 4. **Create meaningful commits** using `git_commit` with descriptive messages
-5. **Handle conflicts** if working with remote repositories
+5. **Configure SSH keys** using `configure_git_ssh_key` for private repository access
+6. **Push changes** using `git_push` to share work with team
+7. **Pull updates** using `git_pull` to sync with remote changes
+8. **Handle conflicts** if working with remote repositories
 
-**Key Functions**: `git_status`, `git_add`, `git_commit`, `get_file_content_by_lines`
+**Key Functions**: `git_status`, `git_add`, `git_commit`, `configure_git_ssh_key`, `git_push`, `git_pull`, `get_file_content_by_lines`
+
+### Git Authentication and Private Repository Access
+
+**Goal**: Securely authenticate with GitHub, GitLab, Bitbucket for private repository operations
+
+**Approach**:
+1. **Configure SSH keys** once per workspace using `configure_git_ssh_key`
+2. **Clone private repositories** using SSH URLs (git@github.com:user/repo.git)
+3. **Push/pull operations** will automatically use configured SSH keys
+4. **Remove SSH keys** when no longer needed using `remove_git_ssh_key`
+
+**SSH Key Configuration Example**:
+```python
+# Configure SSH key for private repository access
+await tools.configure_git_ssh_key(
+    workspace_name="my-private-project",
+    private_key="-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    public_key="ssh-rsa AAAAB3NzaC1yc2E... user@host"  # optional
+)
+
+# Clone private repository (automatically uses SSH key)
+await tools.clone_workspace_from_git(
+    name="my-private-project",
+    git_url="git@github.com:username/private-repo.git"
+)
+
+# Push changes (automatically uses SSH key)
+await tools.git_push(
+    workspace_name="my-private-project",
+    remote_name="origin",
+    branch_name="main"
+)
+```
+
+**Security Features**:
+- SSH keys are stored securely with proper file permissions (600 for private keys)
+- Each workspace has isolated SSH configuration
+- SSH environment is only temporarily set during Git operations
+- Keys can be easily removed when no longer needed
+
+**Key Functions**: `configure_git_ssh_key`, `remove_git_ssh_key`, `clone_workspace_from_git`, `git_push`, `git_pull`
 
 ### Testing and Quality Assurance
 
@@ -231,6 +291,12 @@ src/main/scala/Main.scala
 - Clean build artifacts when encountering issues
 - Commit frequently with clear messages
 
+**Git Authentication:**
+- Configure SSH keys once per workspace for private repositories
+- Use SSH URLs (git@github.com:user/repo.git) for private repository access
+- Remove SSH keys when workspace is no longer needed for security
+- Test SSH access by cloning or pushing after configuration
+
 **Performance:**
 - Use appropriate timeouts for long-running operations
 - Clean up bash sessions when finished
@@ -246,5 +312,6 @@ src/main/scala/Main.scala
 5. **ONE CHANGE AT A TIME** - Make atomic, focused modifications
 6. **HANDLE ERRORS GRACEFULLY** - Read error messages and fix systematically
 7. **COMMIT WORKING STATE** - Save progress with meaningful commit messages
+8. **CONFIGURE SSH FOR PRIVATE REPOS** - Use `configure_git_ssh_key` before cloning or pushing to private repositories
 
 The key to success is understanding that these tools enable complete development workflows - from initial project setup through debugging and deployment. Focus on accomplishing user requirements systematically rather than just calling individual functions. 

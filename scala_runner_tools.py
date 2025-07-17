@@ -62,7 +62,7 @@ class Tools:
       - POST /run   : execute Scala code via scala-cli in Docker
       - Workspace management (create, list, delete, clone)
       - File operations (create, read, update, delete, patch)
-      - Git operations (checkout, add, commit, push, pull, status, log)
+      - Git operations (checkout, add, commit, push, pull, status, log, SSH key configuration)
       - SBT operations (compile, run, test, clean, project info)
       - Search operations (search files by content)
       - Bash session management (create, execute, close sessions)
@@ -987,6 +987,179 @@ class Tools:
             return {"error": msg, "status_code": response.status_code, "body": body}
         except Exception as e:
             await _emit(__event_emitter__, f"Git commit failed: {e}", done=True)
+            return {"error": str(e)}
+
+    async def git_push(
+        self,
+        workspace_name: str,
+        remote_name: str = "origin",
+        branch_name: Optional[str] = None,
+        __event_emitter__: Optional[Callable[[Dict], None]] = None,
+    ) -> Union[Dict, Dict[str, str]]:
+        """Push changes to remote Git repository"""
+        await _emit(__event_emitter__, f"Pushing changes from '{workspace_name}' to {remote_name}…")
+        try:
+            payload = {"workspace_name": workspace_name, "remote_name": remote_name}
+            if branch_name:
+                payload["branch_name"] = branch_name
+                
+            async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
+                resp = await client.post(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/git/push",
+                    json=payload,
+                    headers=_build_headers(),
+                )
+            resp.raise_for_status()
+            result = resp.json()
+            await _emit(__event_emitter__, "Git push completed", done=True)
+            return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Git push failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
+        except Exception as e:
+            await _emit(__event_emitter__, f"Git push failed: {e}", done=True)
+            return {"error": str(e)}
+
+    async def git_pull(
+        self,
+        workspace_name: str,
+        remote_name: str = "origin",
+        branch_name: Optional[str] = None,
+        __event_emitter__: Optional[Callable[[Dict], None]] = None,
+    ) -> Union[Dict, Dict[str, str]]:
+        """Pull changes from remote Git repository"""
+        await _emit(__event_emitter__, f"Pulling changes into '{workspace_name}' from {remote_name}…")
+        try:
+            payload = {"workspace_name": workspace_name, "remote_name": remote_name}
+            if branch_name:
+                payload["branch_name"] = branch_name
+                
+            async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
+                resp = await client.post(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/git/pull",
+                    json=payload,
+                    headers=_build_headers(),
+                )
+            resp.raise_for_status()
+            result = resp.json()
+            await _emit(__event_emitter__, "Git pull completed", done=True)
+            return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Git pull failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
+        except Exception as e:
+            await _emit(__event_emitter__, f"Git pull failed: {e}", done=True)
+            return {"error": str(e)}
+
+    async def configure_git_ssh_key(
+        self,
+        workspace_name: str,
+        private_key: str,
+        public_key: Optional[str] = None,
+        passphrase: Optional[str] = None,
+        key_name: str = "id_rsa",
+        __event_emitter__: Optional[Callable[[Dict], None]] = None,
+    ) -> Union[Dict, Dict[str, str]]:
+        """Configure SSH private key for Git authentication
+        
+        This enables push/pull operations to private repositories on GitHub, GitLab, and Bitbucket.
+        
+        Args:
+            workspace_name: Name of the workspace
+            private_key: SSH private key content (e.g., contents of id_rsa file)
+            public_key: SSH public key content (optional, e.g., contents of id_rsa.pub file)
+            passphrase: Passphrase for the private key (optional)
+            key_name: Name for the key file (default: id_rsa)
+        
+        Example:
+            # Configure SSH key for private repository access
+            result = await tools.configure_git_ssh_key(
+                workspace_name="my-project",
+                private_key="-----BEGIN OPENSSH PRIVATE KEY-----\\n...\\n-----END OPENSSH PRIVATE KEY-----",
+                public_key="ssh-rsa AAAAB3NzaC1yc2E... user@host"
+            )
+        """
+        await _emit(__event_emitter__, f"Configuring SSH key for '{workspace_name}'…")
+        try:
+            payload = {
+                "workspace_name": workspace_name,
+                "private_key": private_key,
+                "key_name": key_name
+            }
+            if public_key:
+                payload["public_key"] = public_key
+            if passphrase:
+                payload["passphrase"] = passphrase
+                
+            async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
+                resp = await client.post(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/git/configure-ssh-key",
+                    json=payload,
+                    headers=_build_headers(),
+                )
+            resp.raise_for_status()
+            result = resp.json()
+            await _emit(__event_emitter__, "SSH key configured successfully", done=True)
+            return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"SSH key configuration failed: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
+        except Exception as e:
+            await _emit(__event_emitter__, f"SSH key configuration failed: {e}", done=True)
+            return {"error": str(e)}
+
+    async def remove_git_ssh_key(
+        self,
+        workspace_name: str,
+        __event_emitter__: Optional[Callable[[Dict], None]] = None,
+    ) -> Union[Dict, Dict[str, str]]:
+        """Remove SSH key configuration for a workspace
+        
+        This removes all SSH keys and configuration files for the specified workspace.
+        
+        Args:
+            workspace_name: Name of the workspace
+        """
+        await _emit(__event_emitter__, f"Removing SSH key configuration for '{workspace_name}'…")
+        try:
+            async with httpx.AsyncClient(timeout=self.valves.TIMEOUT) as client:
+                resp = await client.delete(
+                    f"{self.valves.SCALA_RUNNER_SERVER_URL}/git/ssh-key/{workspace_name}",
+                    headers=_build_headers(),
+                )
+            resp.raise_for_status()
+            result = resp.json()
+            await _emit(__event_emitter__, "SSH key configuration removed", done=True)
+            return result
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            msg = f"HTTP {response.status_code} {response.reason_phrase}"
+            await _emit(__event_emitter__, f"Failed to remove SSH key configuration: {msg}", done=True)
+            return {"error": msg, "status_code": response.status_code, "body": body}
+        except Exception as e:
+            await _emit(__event_emitter__, f"Failed to remove SSH key configuration: {e}", done=True)
             return {"error": str(e)}
 
     # Search Operations

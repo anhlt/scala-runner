@@ -1505,12 +1505,31 @@ class WorkspaceManager:
             logger.info(f"Cloning repository {git_url} into workspace {workspace_name}")
             
             # Clone the repository
-            if branch:
-                repo = git.Repo.clone_from(git_url, workspace_path, branch=branch)
-                logger.info(f"Cloned repository on branch: {branch}")
+            # Get SSH environment for private repositories (clone uses git_url to auto-detect SSH needs)
+            ssh_env = self._get_git_ssh_env(workspace_name) if git_url.startswith(('git@', 'ssh://')) else {}
+            
+            if ssh_env:
+                # Use environment variables for SSH authentication
+                original_env = os.environ.copy()
+                os.environ.update(ssh_env)
+                try:
+                    if branch:
+                        repo = git.Repo.clone_from(git_url, workspace_path, branch=branch)
+                        logger.info(f"Cloned repository on branch: {branch} using SSH key")
+                    else:
+                        repo = git.Repo.clone_from(git_url, workspace_path)
+                        logger.info(f"Cloned repository on default branch using SSH key")
+                finally:
+                    # Restore original environment
+                    os.environ.clear()
+                    os.environ.update(original_env)
             else:
-                repo = git.Repo.clone_from(git_url, workspace_path)
-                logger.info(f"Cloned repository on default branch")
+                if branch:
+                    repo = git.Repo.clone_from(git_url, workspace_path, branch=branch)
+                    logger.info(f"Cloned repository on branch: {branch}")
+                else:
+                    repo = git.Repo.clone_from(git_url, workspace_path)
+                    logger.info(f"Cloned repository on default branch")
             
             # Get repository information
             repo_info = {
@@ -1927,10 +1946,20 @@ class WorkspaceManager:
             if not branch_name:
                 branch_name = repo.active_branch.name
             
-            # Push the branch
-            push_info = remote.push(f"{branch_name}:{branch_name}")
-            
-            logger.info(f"Pushed branch {branch_name} to {remote_name}")
+            # Push the branch with SSH support if configured
+            ssh_env = self._get_git_ssh_env(workspace_name)
+            if ssh_env:
+                original_env = os.environ.copy()
+                os.environ.update(ssh_env)
+                try:
+                    push_info = remote.push(f"{branch_name}:{branch_name}")
+                    logger.info(f"Pushed branch {branch_name} to {remote_name} using SSH key")
+                finally:
+                    os.environ.clear()
+                    os.environ.update(original_env)
+            else:
+                push_info = remote.push(f"{branch_name}:{branch_name}")
+                logger.info(f"Pushed branch {branch_name} to {remote_name}")
             
             return {
                 "workspace_name": workspace_name,
@@ -1980,10 +2009,20 @@ class WorkspaceManager:
             if not branch_name:
                 branch_name = repo.active_branch.name
             
-            # Pull the branch
-            pull_info = remote.pull(branch_name)
-            
-            logger.info(f"Pulled branch {branch_name} from {remote_name}")
+            # Pull the branch with SSH support if configured
+            ssh_env = self._get_git_ssh_env(workspace_name)
+            if ssh_env:
+                original_env = os.environ.copy()
+                os.environ.update(ssh_env)
+                try:
+                    pull_info = remote.pull(branch_name)
+                    logger.info(f"Pulled branch {branch_name} from {remote_name} using SSH key")
+                finally:
+                    os.environ.clear()
+                    os.environ.update(original_env)
+            else:
+                pull_info = remote.pull(branch_name)
+                logger.info(f"Pulled branch {branch_name} from {remote_name}")
             
             # Re-index files after pull (new/modified files)
             await self._index_all_files_in_workspace(workspace_name)
@@ -2321,3 +2360,178 @@ lazy val root = (project in file("."))
 '''
         async with aiofiles.open(workspace_path / "src" / "main" / "scala" / "Main.scala", "w") as f:
             await f.write(main_scala_content)
+
+    # SSH Key Management Methods
+    
+    def _get_ssh_key_dir(self, workspace_name: str) -> Path:
+        """Get the SSH key directory for a workspace"""
+        ssh_dir = self.base_dir / "ssh_keys" / workspace_name
+        ssh_dir.mkdir(parents=True, exist_ok=True)
+        # Set secure permissions (readable only by owner)
+        os.chmod(ssh_dir, 0o700)
+        return ssh_dir
+
+    async def configure_git_ssh_key(self, workspace_name: str, private_key: str, 
+                                   public_key: Optional[str] = None, 
+                                   passphrase: Optional[str] = None, 
+                                   key_name: str = "id_rsa") -> Dict:
+        """
+        Configure SSH private key for Git authentication
+        
+        Args:
+            workspace_name: Name of the workspace
+            private_key: SSH private key content
+            public_key: SSH public key content (optional)
+            passphrase: Passphrase for the private key (optional)
+            key_name: Name for the key file (default: id_rsa)
+            
+        Returns:
+            Dict with configuration results
+        """
+        workspace_path = self.workspaces_dir / workspace_name
+        
+        if not workspace_path.exists():
+            raise ValueError(f"Workspace '{workspace_name}' not found")
+        
+        try:
+            # Get SSH key directory
+            ssh_dir = self._get_ssh_key_dir(workspace_name)
+            
+            # Write private key
+            private_key_path = ssh_dir / key_name
+            async with aiofiles.open(private_key_path, "w") as f:
+                await f.write(private_key)
+            # Set secure permissions for private key (readable only by owner)
+            os.chmod(private_key_path, 0o600)
+            
+            # Write public key if provided
+            public_key_path = None
+            if public_key:
+                public_key_path = ssh_dir / f"{key_name}.pub"
+                async with aiofiles.open(public_key_path, "w") as f:
+                    await f.write(public_key)
+                os.chmod(public_key_path, 0o644)
+            
+            # Store passphrase securely if provided
+            if passphrase:
+                passphrase_path = ssh_dir / f"{key_name}.passphrase"
+                async with aiofiles.open(passphrase_path, "w") as f:
+                    await f.write(passphrase)
+                os.chmod(passphrase_path, 0o600)
+            
+            # Create SSH config for this workspace
+            await self._create_ssh_config(workspace_name, key_name)
+            
+            logger.info(f"Configured SSH key for workspace: {workspace_name}")
+            
+            return {
+                "workspace_name": workspace_name,
+                "key_name": key_name,
+                "private_key_configured": True,
+                "public_key_configured": public_key is not None,
+                "passphrase_configured": passphrase is not None,
+                "ssh_config_created": True,
+                "message": f"SSH key '{key_name}' configured successfully for workspace '{workspace_name}'"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error configuring SSH key: {e}")
+            raise ValueError(f"Failed to configure SSH key: {str(e)}")
+
+    async def _create_ssh_config(self, workspace_name: str, key_name: str):
+        """Create SSH configuration for the workspace"""
+        ssh_dir = self._get_ssh_key_dir(workspace_name)
+        config_path = ssh_dir / "config"
+        
+        # SSH config content
+        config_content = f"""# SSH config for workspace: {workspace_name}
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile {ssh_dir / key_name}
+    IdentitiesOnly yes
+    StrictHostKeyChecking no
+
+Host gitlab.com
+    HostName gitlab.com
+    User git
+    IdentityFile {ssh_dir / key_name}
+    IdentitiesOnly yes
+    StrictHostKeyChecking no
+
+Host bitbucket.org
+    HostName bitbucket.org
+    User git
+    IdentityFile {ssh_dir / key_name}
+    IdentitiesOnly yes
+    StrictHostKeyChecking no
+"""
+        
+        async with aiofiles.open(config_path, "w") as f:
+            await f.write(config_content)
+        os.chmod(config_path, 0o600)
+
+    async def remove_git_ssh_key(self, workspace_name: str) -> Dict:
+        """
+        Remove SSH key configuration for a workspace
+        
+        Args:
+            workspace_name: Name of the workspace
+            
+        Returns:
+            Dict with removal results
+        """
+        workspace_path = self.workspaces_dir / workspace_name
+        
+        if not workspace_path.exists():
+            raise ValueError(f"Workspace '{workspace_name}' not found")
+        
+        try:
+            ssh_dir = self.base_dir / "ssh_keys" / workspace_name
+            
+            if ssh_dir.exists():
+                # Remove entire SSH directory for this workspace
+                shutil.rmtree(ssh_dir)
+                logger.info(f"Removed SSH key configuration for workspace: {workspace_name}")
+                
+                return {
+                    "workspace_name": workspace_name,
+                    "ssh_keys_removed": True,
+                    "message": f"SSH key configuration removed for workspace '{workspace_name}'"
+                }
+            else:
+                return {
+                    "workspace_name": workspace_name,
+                    "ssh_keys_removed": False,
+                    "message": f"No SSH key configuration found for workspace '{workspace_name}'"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error removing SSH key: {e}")
+            raise ValueError(f"Failed to remove SSH key: {str(e)}")
+
+
+
+    def _get_git_ssh_env(self, workspace_name: str) -> Dict[str, str]:
+        """
+        Get environment variables for Git operations using SSH keys
+        
+        Args:
+            workspace_name: Name of the workspace
+            
+        Returns:
+            Dict with environment variables for Git SSH operations
+        """
+        ssh_dir = self.base_dir / "ssh_keys" / workspace_name
+        
+        if not ssh_dir.exists():
+            return {}
+        
+        # Set SSH command to use the workspace-specific SSH config
+        ssh_config_path = ssh_dir / "config"
+        if ssh_config_path.exists():
+            return {
+                "GIT_SSH_COMMAND": f"ssh -F {ssh_config_path}"
+            }
+        
+        return {}
